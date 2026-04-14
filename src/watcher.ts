@@ -172,7 +172,7 @@ export class CopyTrader {
       const result = await copyTradeWithSize(trade, copySize);
       this.history.push(result);
 
-      const marketInfo = await getMarketInfo(trade.tokenId);
+      const marketInfo = await getMarketInfo(trade.tokenId, trade.market);
       const question = marketInfo?.question ?? "";
 
       await this.tg.notifyNewTrade(

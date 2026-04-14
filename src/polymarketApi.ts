@@ -83,16 +83,21 @@ function normalizeTrade(raw: any): Trade {
 
 export async function getMarketInfo(
   tokenId: string,
+  conditionId?: string,
 ): Promise<MarketInfo | null> {
+  // The CLOB /markets endpoint requires the conditionId (0x... hex), not the numeric token ID.
+  const lookupId = conditionId || tokenId;
   try {
-    const res = await axios.get(`${CLOB_API}/markets/${tokenId}`, {
+    const res = await axios.get(`${CLOB_API}/markets/${lookupId}`, {
       timeout: 10_000,
     });
     const d = res.data;
+    // Find the specific outcome for this tokenId from the tokens array
+    const token = (d.tokens ?? []).find((t: any) => t.token_id === tokenId);
     return {
-      conditionId: d.condition_id ?? "",
+      conditionId: d.condition_id ?? conditionId ?? "",
       tokenId,
-      outcome: d.outcome ?? "",
+      outcome: token?.outcome ?? d.outcome ?? "",
       question: d.question ?? "",
       tickSize: d.minimum_tick_size ?? "0.01",
       negRisk: d.neg_risk ?? false,

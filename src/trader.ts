@@ -57,7 +57,10 @@ export async function copyTradeWithSize(
     return result;
   }
 
-  const marketInfo: MarketInfo | null = await getMarketInfo(trade.tokenId);
+  const marketInfo: MarketInfo | null = await getMarketInfo(
+    trade.tokenId,
+    trade.market,
+  );
   if (!marketInfo) {
     result.status = "FAILED";
     result.reason = `Could not fetch market info for ${trade.tokenId}`;
