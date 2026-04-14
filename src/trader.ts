@@ -89,10 +89,12 @@ export async function copyTradeWithSize(
       OrderType.GTC,
     );
 
+    console.log(`[Trader] ✅ PLACED orderId=${response.orderID}`);
     result.status = "PLACED";
     result.orderId = response.orderID;
     return result;
   } catch (err: any) {
+    console.error(`[Trader] ❌ createAndPostOrder FAILED: ${err.message}`);
     result.status = "FAILED";
     result.reason = err.message;
     return result;

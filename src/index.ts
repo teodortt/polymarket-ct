@@ -22,7 +22,11 @@ async function main() {
   const bot = new CopyTrader(config.targetWallets, tg);
 
   // 3. Launch Telegram bot AFTER register() is called
-  await tg.launch();
+  await tg
+    .launch()
+    .catch((err: Error) =>
+      console.error("[Telegram] Launch error:", err.message),
+    );
 
   process.on("SIGINT", async () => {
     console.log("\n\n[Main] Shutting down...");

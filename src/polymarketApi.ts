@@ -34,7 +34,7 @@ export async function getTradesForWallet(
       ? res.data
       : (res.data?.data ?? []);
 
-    return raw
+    const trades = raw
       .filter(
         (t: any) =>
           t.type === "TRADE" ||
@@ -43,6 +43,8 @@ export async function getTradesForWallet(
           t.outcome !== undefined,
       )
       .map(normalizeTrade);
+
+    return trades;
   } catch (err: any) {
     if (axios.isAxiosError(err)) {
       console.error(
