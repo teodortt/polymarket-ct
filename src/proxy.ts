@@ -12,11 +12,14 @@ export function setupProxy(proxyUrl: string): void {
 
   agent = new SocksProxyAgent(proxyUrl);
 
-  // Set on global axios defaults — ClobClient uses the global axios instance,
-  // so its order submissions will route via WARP.
-  // polymarketApi.ts overrides per-request with a direct agent.
-  axios.defaults.httpsAgent = agent;
-  axios.defaults.httpAgent = agent;
+  // Use an interceptor so every axios call (including ClobClient's) gets the
+  // SOCKS agent injected — unless the caller already set an explicit httpsAgent
+  // (e.g. polymarketApi.ts uses directAgent to bypass the proxy).
+  axios.interceptors.request.use((cfg) => {
+    if (!cfg.httpsAgent) cfg.httpsAgent = agent;
+    if (!cfg.httpAgent) cfg.httpAgent = agent;
+    return cfg;
+  });
 
   console.log(`[Proxy] Orders routed via WARP: ${proxyUrl}`);
 }
