@@ -1,5 +1,8 @@
 import axios from "axios";
+import * as https from "https";
 import { Trade, MarketInfo } from "./types";
+
+const directAgent = new https.Agent();
 
 const DATA_API = "https://data-api.polymarket.com";
 const CLOB_API = "https://clob.polymarket.com";
@@ -28,6 +31,7 @@ export async function getTradesForWallet(
     const res = await axios.get(`${DATA_API}/activity`, {
       params,
       timeout: 10_000,
+      httpsAgent: directAgent,
     });
 
     const raw: any[] = Array.isArray(res.data)
@@ -92,6 +96,7 @@ export async function getMarketInfo(
   try {
     const res = await axios.get(`${CLOB_API}/markets/${lookupId}`, {
       timeout: 10_000,
+      httpsAgent: directAgent,
     });
     const d = res.data;
     // Find the specific outcome for this tokenId from the tokens array
