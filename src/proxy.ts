@@ -1,5 +1,3 @@
-import * as http from "http";
-import * as https from "https";
 import { SocksProxyAgent } from "socks-proxy-agent";
 
 let agent: SocksProxyAgent | null = null;
@@ -12,11 +10,6 @@ export function setupProxy(proxyUrl: string): void {
   if (!proxyUrl) return;
 
   agent = new SocksProxyAgent(proxyUrl);
-
-  // Patch global agents — covers ClobClient and any other library
-  // that relies on Node's default http/https transport.
-  (http as any).globalAgent = agent;
-  (https as any).globalAgent = agent;
 
   console.log(`[Proxy] Traffic routed via WARP: ${proxyUrl}`);
 }
