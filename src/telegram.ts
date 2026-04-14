@@ -75,6 +75,29 @@ export class TelegramBot {
     } as any);
   }
 
+  // Helper — edit message if in callback context, else send new
+  private async editOrReply(ctx: Context, text: string, extra?: object) {
+    const fullExtra = { parse_mode: "Markdown" as const, ...(extra ?? {}) };
+    if (
+      "editMessageText" in ctx &&
+      typeof (ctx as any).editMessageText === "function"
+    ) {
+      try {
+        await (ctx as any).editMessageText(text, fullExtra);
+        return;
+      } catch {
+        /* fall through */
+      }
+    }
+    await this.replyTo(ctx, text, fullExtra);
+  }
+
+  private refreshBtn(action: string) {
+    return Markup.inlineKeyboard([
+      [Markup.button.callback("🔄 Refresh", action)],
+    ]);
+  }
+
   private setupCommands() {
     const b = this.bot;
 
@@ -233,6 +256,33 @@ export class TelegramBot {
           parse_mode: "Markdown",
         });
       } else ctx.reply("Употреба: /dryrun on|off");
+    });
+
+    // Refresh callbacks
+    b.action("refresh:pnl", (ctx) => {
+      if (!this.allowed(ctx)) return;
+      ctx.answerCbQuery().catch(() => {});
+      this.handlePnl(ctx);
+    });
+    b.action("refresh:status", (ctx) => {
+      if (!this.allowed(ctx)) return;
+      ctx.answerCbQuery().catch(() => {});
+      this.handleStatus(ctx);
+    });
+    b.action("refresh:orders", (ctx) => {
+      if (!this.allowed(ctx)) return;
+      ctx.answerCbQuery().catch(() => {});
+      this.handleOrders(ctx);
+    });
+    b.action("refresh:history", (ctx) => {
+      if (!this.allowed(ctx)) return;
+      ctx.answerCbQuery().catch(() => {});
+      this.handleHistory(ctx, 10);
+    });
+    b.action("refresh:daily", (ctx) => {
+      if (!this.allowed(ctx)) return;
+      ctx.answerCbQuery().catch(() => {});
+      this.handleDaily(ctx, false);
     });
 
     // Help
@@ -447,7 +497,7 @@ export class TelegramBot {
     }
     const pct = totalInvested > 0 ? (totalPnlVal / totalInvested) * 100 : 0;
     msg += `─────────────────\n*TOTAL*: $${totalInvested.toFixed(2)} | ${totalPnlVal >= 0 ? "▲ +" : "▼ "}$${Math.abs(totalPnlVal).toFixed(4)} (${totalPnlVal >= 0 ? "+" : ""}${pct.toFixed(1)}%)`;
-    ctx.reply(msg, { parse_mode: "Markdown" });
+    this.editOrReply(ctx, msg, this.refreshBtn("refresh:pnl"));
   }
 
   // ─── Daily P&L per wallet ───────────────────────────────────────────────────
@@ -496,7 +546,7 @@ export class TelegramBot {
     }
 
     msg += `_/daily — само днес | /dailyall — всички дни_`;
-    ctx.reply(msg, { parse_mode: "Markdown" });
+    this.editOrReply(ctx, msg, this.refreshBtn("refresh:daily"));
   }
 
   // ─── History ──────────────────────────────────────────────────────────────────
@@ -521,7 +571,7 @@ export class TelegramBot {
       if (t.reason) msg += `  _${t.reason}_\n`;
       msg += "\n";
     }
-    ctx.reply(msg, { parse_mode: "Markdown" });
+    this.editOrReply(ctx, msg, this.refreshBtn("refresh:history"));
   }
 
   // ─── Orders ──────────────────────────────────────────────────────────────────
@@ -546,7 +596,7 @@ export class TelegramBot {
       msg += `  Price: *${price}* | Rem: $${remaining} | Filled: $${matched}\n`;
       msg += `  \`${o.id ?? "—"}\`\n\n`;
     }
-    ctx.reply(msg, { parse_mode: "Markdown" });
+    this.editOrReply(ctx, msg, this.refreshBtn("refresh:orders"));
   }
 
   // ─── Status ───────────────────────────────────────────────────────────────────
@@ -572,7 +622,7 @@ export class TelegramBot {
         `Poll: ${config.pollIntervalMs / 1000}s\n\n` +
         `*Wallets (${cfgs.length}):*\n${wList}\n\n` +
         `✅ ${placed} | ❌ ${failed} | 📦 ${history.length}`,
-      { parse_mode: "Markdown" },
+      { parse_mode: "Markdown", ...this.refreshBtn("refresh:status") },
     );
   }
 
