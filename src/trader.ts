@@ -89,6 +89,18 @@ export async function copyTradeWithSize(
       OrderType.GTC,
     );
 
+    // throwOnError defaults to false in ClobClient — must check success manually
+    if (!response?.success) {
+      const reason =
+        response?.errorMsg ||
+        JSON.stringify(response) ||
+        "Order rejected by CLOB";
+      console.error(`[Trader] ❌ Order rejected: ${reason}`);
+      result.status = "FAILED";
+      result.reason = reason;
+      return result;
+    }
+
     console.log(`[Trader] ✅ PLACED orderId=${response.orderID}`);
     result.status = "PLACED";
     result.orderId = response.orderID;

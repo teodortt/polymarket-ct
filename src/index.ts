@@ -22,11 +22,13 @@ async function main() {
   const bot = new CopyTrader(config.targetWallets, tg);
 
   // 3. Launch Telegram bot AFTER register() is called
-  await tg
-    .launch()
-    .catch((err: Error) =>
-      console.error("[Telegram] Launch error:", err.message),
-    );
+  // In Telegraf v4, launch() blocks until the bot stops — do NOT await
+  tg.launch().catch((err: Error) =>
+    console.error("[Telegram] Launch error:", err.message),
+  );
+
+  // Give Telegram a moment to connect before polling starts
+  await new Promise((r) => setTimeout(r, 1500));
 
   process.on("SIGINT", async () => {
     console.log("\n\n[Main] Shutting down...");
