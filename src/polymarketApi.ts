@@ -1,6 +1,5 @@
 import axios from "axios";
 import { Trade, MarketInfo } from "./types";
-import { getProxyAgent } from "./proxy";
 
 const DATA_API = "https://data-api.polymarket.com";
 const CLOB_API = "https://clob.polymarket.com";
@@ -26,30 +25,10 @@ export async function getTradesForWallet(
     };
     if (after) params.after = after;
 
-    const fetchActivity = (agent: any) =>
-      axios.get(`${DATA_API}/activity`, {
-        params,
-        timeout: 10_000,
-        httpsAgent: agent,
-        httpAgent: agent,
-        maxRedirects: 5,
-      });
-
-    let res;
-    try {
-      res = await fetchActivity(getProxyAgent());
-    } catch (proxyErr: any) {
-      if (
-        getProxyAgent() &&
-        (proxyErr.message?.includes("redirects") ||
-          proxyErr.code === "ERR_FR_TOO_MANY_REDIRECTS")
-      ) {
-        console.warn("[API] Proxy failed, retrying without proxy...");
-        res = await fetchActivity(undefined);
-      } else {
-        throw proxyErr;
-      }
-    }
+    const res = await axios.get(`${DATA_API}/activity`, {
+      params,
+      timeout: 10_000,
+    });
 
     const raw: any[] = Array.isArray(res.data)
       ? res.data
@@ -111,28 +90,9 @@ export async function getMarketInfo(
   // The CLOB /markets endpoint requires the conditionId (0x... hex), not the numeric token ID.
   const lookupId = conditionId || tokenId;
   try {
-    let res;
-    try {
-      res = await axios.get(`${CLOB_API}/markets/${lookupId}`, {
-        timeout: 10_000,
-        httpsAgent: getProxyAgent(),
-        httpAgent: getProxyAgent(),
-        maxRedirects: 5,
-      });
-    } catch (proxyErr: any) {
-      if (
-        getProxyAgent() &&
-        (proxyErr.message?.includes("redirects") ||
-          proxyErr.code === "ERR_FR_TOO_MANY_REDIRECTS")
-      ) {
-        res = await axios.get(`${CLOB_API}/markets/${lookupId}`, {
-          timeout: 10_000,
-          maxRedirects: 5,
-        });
-      } else {
-        throw proxyErr;
-      }
-    }
+    const res = await axios.get(`${CLOB_API}/markets/${lookupId}`, {
+      timeout: 10_000,
+    });
     const d = res.data;
     // Find the specific outcome for this tokenId from the tokens array
     const token = (d.tokens ?? []).find((t: any) => t.token_id === tokenId);

@@ -1,3 +1,5 @@
+import * as http from "http";
+import * as https from "https";
 import { SocksProxyAgent } from "socks-proxy-agent";
 
 let agent: SocksProxyAgent | null = null;
@@ -11,7 +13,12 @@ export function setupProxy(proxyUrl: string): void {
 
   agent = new SocksProxyAgent(proxyUrl);
 
-  console.log(`[Proxy] Traffic routed via WARP: ${proxyUrl}`);
+  // Patch global agents so ClobClient (order submit/close) routes via proxy.
+  // axios calls in polymarketApi.ts use direct connections explicitly.
+  (http as any).globalAgent = agent;
+  (https as any).globalAgent = agent;
+
+  console.log(`[Proxy] Orders routed via WARP: ${proxyUrl}`);
 }
 
 /** Returns the proxy agent for explicit use in axios calls. */
