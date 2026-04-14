@@ -1,9 +1,12 @@
 import { config } from "./config";
+import { setupProxy } from "./proxy";
 import { TelegramBot } from "./telegram";
 import { CopyTrader } from "./watcher";
 import { initTrader } from "./trader";
 
 async function main() {
+  // Apply WARP SOCKS5 proxy before any network calls
+  if (config.proxyUrl) setupProxy(config.proxyUrl);
   console.log("=".repeat(50));
   console.log("   Polymarket CopyBot + Telegram");
   console.log("=".repeat(50));
