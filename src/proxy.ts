@@ -3,18 +3,13 @@ import { SocksProxyAgent } from "socks-proxy-agent";
 
 let agent: SocksProxyAgent | null = null;
 
-/**
- * Call once at startup. Patches Node's global HTTP/HTTPS agents so that
- * ALL outgoing requests (axios, ClobClient, telegraf, etc.) go through the proxy.
- */
 export function setupProxy(proxyUrl: string): void {
   if (!proxyUrl) return;
 
   agent = new SocksProxyAgent(proxyUrl);
 
-  // Use an interceptor so every axios call (including ClobClient's) gets the
-  // SOCKS agent injected — unless the caller already set an explicit httpsAgent
-  // (e.g. polymarketApi.ts uses directAgent to bypass the proxy).
+  // Inject SOCKS agent into every axios request that doesn't already have one.
+  // polymarketApi.ts sets directAgent explicitly to bypass this.
   axios.interceptors.request.use((cfg) => {
     if (!cfg.httpsAgent) cfg.httpsAgent = agent;
     if (!cfg.httpAgent) cfg.httpAgent = agent;
@@ -24,7 +19,24 @@ export function setupProxy(proxyUrl: string): void {
   console.log(`[Proxy] Orders routed via WARP: ${proxyUrl}`);
 }
 
-/** Returns the proxy agent for explicit use in axios calls. */
+/** Verifies the proxy is reachable and logs the exit IP. Call after setupProxy(). */
+export async function verifyProxy(): Promise<void> {
+  if (!agent) return;
+  try {
+    const res = await axios.get("https://api.ipify.org?format=json", {
+      httpsAgent: agent,
+      httpAgent: agent,
+      timeout: 8_000,
+    });
+    console.log(`[Proxy] ✅ Exit IP: ${res.data?.ip}`);
+  } catch (err: any) {
+    console.error(`[Proxy] ❌ WARP unreachable: ${err.message}`);
+    console.error(
+      `[Proxy] ⚠️  Orders will be sent WITHOUT proxy — may be geoblocked!`,
+    );
+  }
+}
+
 export function getProxyAgent(): SocksProxyAgent | undefined {
   return agent ?? undefined;
 }
