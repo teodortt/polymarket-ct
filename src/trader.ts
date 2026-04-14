@@ -95,3 +95,14 @@ export async function copyTradeWithSize(
     return result;
   }
 }
+
+export async function getOpenOrders(): Promise<any[]> {
+  try {
+    const c = await initTrader();
+    const res = await (c as any).getOpenOrders();
+    return Array.isArray(res) ? res : (res?.data ?? []);
+  } catch (err: any) {
+    console.error("[Trader] getOpenOrders failed:", err.message);
+    return [];
+  }
+}

@@ -1,5 +1,5 @@
 import { getTradesForWallet, getMarketInfo } from "./polymarketApi";
-import { copyTradeWithSize } from "./trader";
+import { copyTradeWithSize, getOpenOrders } from "./trader";
 import { config } from "./config";
 import { Trade, CopiedTrade } from "./types";
 import { PnLTracker } from "./pnl";
@@ -67,6 +67,7 @@ export class CopyTrader {
         config.dryRun = v;
       },
       walletCfgs: this.cfgStore, // pass reference directly — always defined
+      getOrders: () => getOpenOrders(),
     });
   }
 

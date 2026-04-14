@@ -13,6 +13,7 @@ type RemoveWalletFn = (wallet: string) => { ok: boolean; msg: string };
 type GetHistoryFn = () => CopiedTrade[];
 type GetPnLFn = () => PnLTracker;
 type SetDryRunFn = (val: boolean) => void;
+type GetOrdersFn = () => Promise<any[]>;
 
 type Step = {
   type: "set_wallet_field";
@@ -30,6 +31,7 @@ export class TelegramBot {
   private getHistory!: GetHistoryFn;
   private getPnL!: GetPnLFn;
   private setDryRun!: SetDryRunFn;
+  private getOrders!: GetOrdersFn;
   private walletCfgs!: WalletConfigStore;
 
   constructor() {
@@ -44,6 +46,7 @@ export class TelegramBot {
     getHistory: GetHistoryFn;
     getPnL: GetPnLFn;
     setDryRun: SetDryRunFn;
+    getOrders: GetOrdersFn;
     walletCfgs: WalletConfigStore;
   }) {
     Object.assign(this, callbacks);
@@ -204,6 +207,10 @@ export class TelegramBot {
       this.handleHistory(ctx, n);
     });
     b.hears("📜 History", (ctx) => this.handleHistory(ctx, 10));
+
+    // Orders
+    b.command("orders", (ctx) => this.handleOrders(ctx));
+    b.hears("📂 Orders", (ctx) => this.handleOrders(ctx));
 
     // Status
     b.command("status", (ctx) => this.handleStatus(ctx));
@@ -517,6 +524,31 @@ export class TelegramBot {
     ctx.reply(msg, { parse_mode: "Markdown" });
   }
 
+  // ─── Orders ──────────────────────────────────────────────────────────────────
+  private async handleOrders(ctx: Context) {
+    if (!this.allowed(ctx)) return;
+    await ctx.reply("⏳ Зареждам активни поръчки…", { parse_mode: "Markdown" });
+    const orders = await this.getOrders();
+    if (orders.length === 0) return ctx.reply("📂 Няма активни поръчки.");
+
+    const sides: Record<string, string> = { BUY: "🟢 BUY", SELL: "🔴 SELL" };
+    let msg = `📂 *Активни поръчки (${orders.length}):*\n\n`;
+    for (const o of orders) {
+      const side = sides[o.side?.toUpperCase()] ?? o.side;
+      const price = parseFloat(o.price ?? 0).toFixed(4);
+      const remaining = parseFloat(
+        o.size_remaining ?? o.original_size ?? 0,
+      ).toFixed(2);
+      const matched = parseFloat(o.size_matched ?? 0).toFixed(2);
+      const outcome = o.outcome ? ` (${o.outcome})` : "";
+      const asset = (o.asset_id ?? o.tokenId ?? "").slice(0, 12);
+      msg += `${side}${outcome} | \`${asset}…\`\n`;
+      msg += `  Price: *${price}* | Rem: $${remaining} | Filled: $${matched}\n`;
+      msg += `  \`${o.id ?? "—"}\`\n\n`;
+    }
+    ctx.reply(msg, { parse_mode: "Markdown" });
+  }
+
   // ─── Status ───────────────────────────────────────────────────────────────────
   private handleStatus(ctx: Context) {
     if (!this.allowed(ctx)) return;
@@ -572,6 +604,7 @@ export class TelegramBot {
         `/wset 0x... percent 50\n` +
         `/wset 0x... label "Whale #1"\n\n` +
         `/pnl | /history [n] | /status\n` +
+        `/orders — активни поръчки\n` +
         `/dryrun on|off | /settings`,
       { parse_mode: "Markdown" },
     );
