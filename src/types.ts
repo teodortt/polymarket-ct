@@ -28,6 +28,7 @@ export interface CopiedTrade {
   status: "PLACED" | "FAILED" | "SKIPPED" | "DRY_RUN";
   reason?: string;
   timestamp: number;
+  sourceWallet?: string; // wallet whose trade was copied
 }
 
 export interface WalletConfig {

@@ -7,9 +7,10 @@ export interface Position {
   question: string;
   outcome: string;
   side: "BUY" | "SELL";
-  totalSizeUsdc: number;
-  totalShares: number;
+  totalSizeUsdc: number; // net invested (BUY adds, SELL reduces)
+  totalShares: number; // net shares held
   avgPrice: number;
+  realizedPnl: number; // P&L locked-in by SELLs
   currentPrice?: number;
   unrealizedPnl?: number;
   unrealizedPnlPct?: number;
@@ -47,26 +48,49 @@ export class PnLTracker {
     // ── position tracker ──────────────────────────────────────────────────────
     const existing = this.positions.get(tokenId);
     if (!existing) {
+      // First trade for this token. A SELL with no prior position is treated
+      // as a short entry (rare for copy-trading, but stay consistent).
       this.positions.set(tokenId, {
         tokenId,
         question,
         outcome,
         side,
         totalSizeUsdc: sizeUsdc,
-        totalShares: shares,
+        totalShares: side === "BUY" ? shares : -shares,
         avgPrice: price,
+        realizedPnl: 0,
         trades: 1,
         sourceWallets: sourceWallet ? [sourceWallet] : [],
       });
-    } else {
+    } else if (side === "BUY") {
+      // Add to position — recompute weighted avg only over the long side
       const newShares = existing.totalShares + shares;
-      existing.avgPrice =
-        newShares > 0
-          ? (existing.avgPrice * existing.totalShares + price * shares) /
-            newShares
-          : price;
+      if (existing.totalShares > 0 && newShares > 0) {
+        existing.avgPrice =
+          (existing.avgPrice * existing.totalShares + price * shares) /
+          newShares;
+      } else if (existing.totalShares <= 0 && newShares > 0) {
+        // Flipped from short/flat to long — reset avg to current price
+        existing.avgPrice = price;
+      }
       existing.totalSizeUsdc += sizeUsdc;
       existing.totalShares = newShares;
+      existing.trades++;
+      if (sourceWallet && !existing.sourceWallets.includes(sourceWallet)) {
+        existing.sourceWallets.push(sourceWallet);
+      }
+    } else {
+      // SELL — realize P&L on the closed portion, reduce share count
+      const closing = Math.min(shares, Math.max(existing.totalShares, 0));
+      if (closing > 0) {
+        existing.realizedPnl += (price - existing.avgPrice) * closing;
+        // Reduce invested proportionally (cost basis of sold shares)
+        existing.totalSizeUsdc = Math.max(
+          0,
+          existing.totalSizeUsdc - existing.avgPrice * closing,
+        );
+      }
+      existing.totalShares -= shares;
       existing.trades++;
       if (sourceWallet && !existing.sourceWallets.includes(sourceWallet)) {
         existing.sourceWallets.push(sourceWallet);
@@ -106,10 +130,10 @@ export class PnLTracker {
         const currentPrice = parseFloat(res.data?.price ?? "0");
         if (currentPrice > 0) {
           pos.currentPrice = currentPrice;
+          // Unrealized P&L only on remaining long shares
+          const openShares = Math.max(pos.totalShares, 0);
           pos.unrealizedPnl =
-            pos.side === "BUY"
-              ? (currentPrice - pos.avgPrice) * pos.totalShares
-              : (pos.avgPrice - currentPrice) * pos.totalShares;
+            (currentPrice - pos.avgPrice) * openShares + pos.realizedPnl;
           pos.unrealizedPnlPct =
             pos.totalSizeUsdc > 0
               ? (pos.unrealizedPnl / pos.totalSizeUsdc) * 100

@@ -1,11 +1,49 @@
 import { WalletConfig } from "./types";
 import { config } from "./config";
+import * as fs from "fs";
+import * as path from "path";
+
+const DATA_DIR = path.join(process.cwd(), "data");
+const STORE_PATH = path.join(DATA_DIR, "wallets.json");
 
 export class WalletConfigStore {
   private configs: Map<string, WalletConfig> = new Map();
 
+  constructor() {
+    this.load();
+  }
+
+  private load() {
+    try {
+      if (!fs.existsSync(STORE_PATH)) return;
+      const raw = fs.readFileSync(STORE_PATH, "utf8");
+      const parsed = JSON.parse(raw) as WalletConfig[];
+      for (const cfg of parsed) {
+        if (cfg?.wallet) this.configs.set(cfg.wallet.toLowerCase(), cfg);
+      }
+      console.log(`[WalletStore] Loaded ${this.configs.size} wallet(s).`);
+    } catch (err: any) {
+      console.error("[WalletStore] Load failed:", err.message);
+    }
+  }
+
+  private save() {
+    try {
+      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(
+        STORE_PATH,
+        JSON.stringify(Array.from(this.configs.values()), null, 2),
+      );
+    } catch (err: any) {
+      console.error("[WalletStore] Save failed:", err.message);
+    }
+  }
+
   add(wallet: string, overrides: Partial<WalletConfig> = {}): WalletConfig {
     const key = wallet.toLowerCase();
+    const existing = this.configs.get(key);
+    // Don't overwrite an existing config (e.g. when env wallets re-add on restart)
+    if (existing) return existing;
     const cfg: WalletConfig = {
       wallet,
       label: overrides.label,
@@ -16,11 +54,14 @@ export class WalletConfigStore {
       copySizeUsdc: overrides.copySizeUsdc ?? config.copySizeUsdc,
     };
     this.configs.set(key, cfg);
+    this.save();
     return cfg;
   }
 
   remove(wallet: string): boolean {
-    return this.configs.delete(wallet.toLowerCase());
+    const ok = this.configs.delete(wallet.toLowerCase());
+    if (ok) this.save();
+    return ok;
   }
 
   get(wallet: string): WalletConfig | undefined {
@@ -37,6 +78,7 @@ export class WalletConfigStore {
     if (!existing) return null;
     const updated = { ...existing, ...patch };
     this.configs.set(key, updated);
+    this.save();
     return updated;
   }
 

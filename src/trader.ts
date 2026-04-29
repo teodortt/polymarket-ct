@@ -52,8 +52,8 @@ export async function copyTradeWithSize(
     timestamp: Date.now(),
   };
 
-  if (copySize < 1) {
-    result.reason = `Size too small: $${copySize.toFixed(2)}`;
+  if (copySize < config.minTradeUsdc) {
+    result.reason = `Size too small: $${copySize.toFixed(2)} < $${config.minTradeUsdc}`;
     return result;
   }
 
@@ -75,19 +75,42 @@ export async function copyTradeWithSize(
 
   try {
     const c = await initTrader();
-    const response = await c.createAndPostOrder(
-      {
-        tokenID: trade.tokenId,
-        price: trade.price,
-        size: copySize,
-        side: trade.side === "BUY" ? Side.BUY : Side.SELL,
-      },
-      {
-        tickSize: marketInfo.tickSize as "0.1" | "0.01" | "0.001" | "0.0001",
-        negRisk: marketInfo.negRisk,
-      },
-      OrderType.GTC,
-    );
+    const tickSize = marketInfo.tickSize as "0.1" | "0.01" | "0.001" | "0.0001";
+    const orderOpts = { tickSize, negRisk: marketInfo.negRisk };
+    const side = trade.side === "BUY" ? Side.BUY : Side.SELL;
+
+    let response: any;
+    if (config.orderType === "FAK" || config.orderType === "FOK") {
+      // Marketable order — must use createAndPostMarketOrder.
+      // For BUY: amount = USDC. For SELL: amount = shares.
+      const amount =
+        side === Side.BUY
+          ? copySize
+          : trade.price > 0
+            ? copySize / trade.price
+            : 0;
+      response = await c.createAndPostMarketOrder(
+        {
+          tokenID: trade.tokenId,
+          price: trade.price,
+          amount,
+          side,
+        },
+        orderOpts,
+        config.orderType === "FAK" ? OrderType.FAK : OrderType.FOK,
+      );
+    } else {
+      response = await c.createAndPostOrder(
+        {
+          tokenID: trade.tokenId,
+          price: trade.price,
+          size: copySize,
+          side,
+        },
+        orderOpts,
+        OrderType.GTC,
+      );
+    }
 
     // throwOnError defaults to false in ClobClient — must check success manually
     if (!response?.success) {
@@ -121,5 +144,20 @@ export async function getOpenOrders(): Promise<any[]> {
   } catch (err: any) {
     console.error("[Trader] getOpenOrders failed:", err.message);
     return [];
+  }
+}
+
+export async function cancelOrdersByIds(
+  orderIds: string[],
+): Promise<{ ok: boolean; cancelled: number; reason?: string }> {
+  if (orderIds.length === 0) return { ok: true, cancelled: 0 };
+  try {
+    const c = await initTrader();
+    await (c as any).cancelOrders(orderIds);
+    console.log(`[Trader] 🗑 Cancelled ${orderIds.length} order(s).`);
+    return { ok: true, cancelled: orderIds.length };
+  } catch (err: any) {
+    console.error("[Trader] cancelOrders failed:", err.message);
+    return { ok: false, cancelled: 0, reason: err.message };
   }
 }

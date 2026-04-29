@@ -30,6 +30,15 @@ export const config = {
   copySizeUsdc: parseFloat(process.env.COPY_SIZE_USDC || "0"),
   sizeMultiplier: parseFloat(process.env.SIZE_MULTIPLIER || "1.0"),
   maxTradeUsdc: parseFloat(process.env.MAX_TRADE_USDC || "100"),
+  // Minimum copy size (USDC). Trades below this are SKIPPED.
+  // Polymarket CLOB enforces $1 minimum on most markets — keep at 1 unless you know better.
+  minTradeUsdc: parseFloat(process.env.MIN_TRADE_USDC || "1"),
+  // Order type for live mode. FAK = Fill-And-Kill (fills what it can immediately, cancels rest).
+  // Recommended for copy trading so we don't sit on stale orders. Use GTC to keep the order alive.
+  orderType: (process.env.ORDER_TYPE || "FAK").toUpperCase() as
+    | "FAK"
+    | "GTC"
+    | "FOK",
   dryRun: process.env.DRY_RUN !== "false",
 
   // Optional SOCKS5/HTTP proxy (e.g. Cloudflare WARP: socks5://127.0.0.1:40000)

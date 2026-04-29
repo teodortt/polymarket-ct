@@ -10,10 +10,18 @@ type AddWalletFn = (
   label?: string,
 ) => Promise<{ ok: boolean; msg: string }>;
 type RemoveWalletFn = (wallet: string) => { ok: boolean; msg: string };
+type WalletExposureFn = (wallet: string) => {
+  placedOrderIds: string[];
+  copiedTrades: number;
+};
+type CancelOrdersForWalletFn = (
+  wallet: string,
+) => Promise<{ ok: boolean; cancelled: number; reason?: string }>;
 type GetHistoryFn = () => CopiedTrade[];
 type GetPnLFn = () => PnLTracker;
 type SetDryRunFn = (val: boolean) => void;
 type GetOrdersFn = () => Promise<any[]>;
+type GetDebugFn = () => any;
 
 type Step = {
   type: "set_wallet_field";
@@ -28,10 +36,13 @@ export class TelegramBot {
 
   private addWallet!: AddWalletFn;
   private removeWallet!: RemoveWalletFn;
+  private walletExposure!: WalletExposureFn;
+  private cancelOrdersForWallet!: CancelOrdersForWalletFn;
   private getHistory!: GetHistoryFn;
   private getPnL!: GetPnLFn;
   private setDryRun!: SetDryRunFn;
   private getOrders!: GetOrdersFn;
+  private getDebug!: GetDebugFn;
   private walletCfgs!: WalletConfigStore;
 
   constructor() {
@@ -43,10 +54,13 @@ export class TelegramBot {
   register(callbacks: {
     addWallet: AddWalletFn;
     removeWallet: RemoveWalletFn;
+    walletExposure: WalletExposureFn;
+    cancelOrdersForWallet: CancelOrdersForWalletFn;
     getHistory: GetHistoryFn;
     getPnL: GetPnLFn;
     setDryRun: SetDryRunFn;
     getOrders: GetOrdersFn;
+    getDebug: GetDebugFn;
     walletCfgs: WalletConfigStore;
   }) {
     Object.assign(this, callbacks);
@@ -211,12 +225,49 @@ export class TelegramBot {
       this.replyTo(ctx, `✏️ Въведи стойност за *${labels[field]}*:`);
     });
 
-    // Inline: remove confirm
+    // Inline: remove → show confirmation panel
     b.action(/^remove:(.+)$/, async (ctx) => {
       if (!this.allowed(ctx)) return;
-      const res = this.removeWallet(ctx.match[1]);
+      ctx.answerCbQuery().catch(() => {});
+      this.showRemoveConfirm(ctx, ctx.match[1]);
+    });
+
+    // Inline: confirm — just stop following (keep open orders / positions)
+    b.action(/^rmkeep:(.+)$/, async (ctx) => {
+      if (!this.allowed(ctx)) return;
+      const wallet = ctx.match[1];
+      const res = this.removeWallet(wallet);
       ctx.answerCbQuery(res.ok ? "Премахнат" : "Грешка").catch(() => {});
-      this.replyTo(ctx, res.ok ? `✅ ${res.msg}` : `❌ ${res.msg}`);
+      this.editOrReply(
+        ctx,
+        res.ok
+          ? `✅ ${res.msg}\n\n_Open positions/orders са оставени непокътнати._`
+          : `❌ ${res.msg}`,
+      );
+    });
+
+    // Inline: confirm — stop following AND cancel any open orders we placed for it
+    b.action(/^rmcancel:(.+)$/, async (ctx) => {
+      if (!this.allowed(ctx)) return;
+      const wallet = ctx.match[1];
+      ctx.answerCbQuery("Cancel + remove…").catch(() => {});
+      const cancelRes = await this.cancelOrdersForWallet(wallet);
+      const rmRes = this.removeWallet(wallet);
+      const lines = [
+        rmRes.ok ? `✅ ${rmRes.msg}` : `❌ ${rmRes.msg}`,
+        cancelRes.ok
+          ? `🗑 Cancelled orders: *${cancelRes.cancelled}*`
+          : `⚠️ Cancel failed: _${cancelRes.reason ?? "?"}_`,
+        `_Already-filled позиции остават в акаунта ти._`,
+      ];
+      this.editOrReply(ctx, lines.join("\n"));
+    });
+
+    // Inline: cancel the remove action — return to wallet config panel
+    b.action(/^rmabort:(.+)$/, (ctx) => {
+      if (!this.allowed(ctx)) return;
+      ctx.answerCbQuery("Отказано").catch(() => {});
+      this.showWalletConfig(ctx, ctx.match[1]);
     });
 
     // P&L
@@ -287,6 +338,14 @@ export class TelegramBot {
       ctx.answerCbQuery().catch(() => {});
       this.handleDaily(ctx, false);
     });
+    b.action("refresh:debug", (ctx) => {
+      if (!this.allowed(ctx)) return;
+      ctx.answerCbQuery().catch(() => {});
+      this.handleDebug(ctx);
+    });
+
+    // Debug — watcher state, useful when "nothing is happening"
+    b.command("debug", (ctx) => this.handleDebug(ctx));
 
     // Help
     b.command("help", (ctx) => this.handleHelp(ctx));
@@ -417,10 +476,49 @@ export class TelegramBot {
     if (!this.allowed(ctx)) return;
     if (!wallet || !wallet.startsWith("0x"))
       return ctx.reply("Употреба: /remove 0xWALLET");
-    const res = this.removeWallet(wallet);
-    ctx.reply(res.ok ? `✅ ${res.msg}` : `❌ ${res.msg}`, {
-      parse_mode: "Markdown",
-    });
+    if (!this.walletCfgs.has(wallet))
+      return ctx.reply(`❌ Wallet не се следва: \`${wallet}\``, {
+        parse_mode: "Markdown",
+      });
+    this.showRemoveConfirm(ctx, wallet);
+  }
+
+  // Confirmation panel — shows what will happen and offers options
+  private showRemoveConfirm(ctx: Context, wallet: string) {
+    const cfg = this.walletCfgs.get(wallet);
+    const exposure = this.walletExposure(wallet);
+    const label = cfg?.label ? `*${cfg.label}* — ` : "";
+    const pnl = this.getPnL();
+    const positions = pnl
+      .getPositions()
+      .filter((p) =>
+        p.sourceWallets
+          .map((w) => w.toLowerCase())
+          .includes(wallet.toLowerCase()),
+      );
+
+    const text =
+      `⚠️ *Премахване на wallet*\n\n` +
+      `${label}\`${wallet}\`\n\n` +
+      `• Copied trades: *${exposure.copiedTrades}*\n` +
+      `• Tracked positions: *${positions.length}*\n` +
+      `• Open orders placed by bot: *${exposure.placedOrderIds.length}*\n\n` +
+      `*Какво искаш да стане?*\n` +
+      `_• "Just stop" → бъдещи trades няма да се копират; всички текущи orders/позиции остават._\n` +
+      `_• "Stop & Cancel orders" → +отменя open поръчки от този wallet (без да продава вече купеното)._`;
+
+    const buttons = [
+      [Markup.button.callback("🛑 Just stop following", `rmkeep:${wallet}`)],
+      [
+        Markup.button.callback(
+          `🗑 Stop & Cancel ${exposure.placedOrderIds.length} order(s)`,
+          `rmcancel:${wallet}`,
+        ),
+      ],
+      [Markup.button.callback("↩️ Отказ", `rmabort:${wallet}`)],
+    ];
+
+    this.editOrReply(ctx, text, Markup.inlineKeyboard(buttons));
   }
 
   // ─── Per-wallet field set ─────────────────────────────────────────────────────
@@ -431,6 +529,19 @@ export class TelegramBot {
     value: string,
   ) {
     if (!this.allowed(ctx)) return;
+    const validFields = [
+      "multiplier",
+      "maxusdc",
+      "copyusdc",
+      "percent",
+      "label",
+    ];
+    if (!validFields.includes(field)) {
+      return this.replyTo(
+        ctx,
+        `❌ Невалидно поле: \`${field}\`\nПозволени: ${validFields.join(", ")}`,
+      );
+    }
     if (!wallet || !this.walletCfgs.has(wallet)) {
       return this.replyTo(ctx, `❌ Wallet не е намерен: \`${wallet}\``);
     }
@@ -668,11 +779,59 @@ export class TelegramBot {
     ctx.reply(
       `⚙️ *Global Settings*\n\n` +
         `Dry run: ${config.dryRun ? "🔵 ON" : "🔴 OFF"}\n` +
-        `Poll: \`${config.pollIntervalMs / 1000}s\`\n\n` +
+        `Order type: \`${config.orderType}\`\n` +
+        `Poll: \`${config.pollIntervalMs / 1000}s\`\n` +
+        `Min trade: \`$${config.minTradeUsdc}\`\n\n` +
         `Per-wallet: /wallets → избери wallet\n\n` +
-        `/dryrun on|off`,
+        `/dryrun on|off | /debug`,
       { parse_mode: "Markdown" },
     );
+  }
+
+  // ─── Debug ────────────────────────────────────────────────────────────────────
+  private handleDebug(ctx: Context) {
+    if (!this.allowed(ctx)) return;
+    const d = this.getDebug();
+    const fmtAgo = (s: number) =>
+      s < 0
+        ? "—"
+        : s < 60
+          ? `${s}s`
+          : s < 3600
+            ? `${Math.floor(s / 60)}m`
+            : `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m`;
+
+    let msg =
+      `🛠 *Debug*\n\n` +
+      `Running: ${d.running ? "🟢" : "🔴"} | Dry: ${d.dryRun ? "🔵 ON" : "🔴 OFF"}\n` +
+      `OrderType: \`${d.orderType}\` | Min: \`$${d.minTradeUsdc}\` | Poll: \`${d.pollIntervalMs / 1000}s\`\n` +
+      `History: ${d.historySize}\n\n` +
+      `*Watchers (${d.watchers.length}):*\n`;
+
+    if (d.watchers.length === 0) {
+      msg += "_(no wallets)_";
+    } else {
+      for (const w of d.watchers) {
+        const label =
+          this.walletCfgs.get(w.wallet)?.label || w.wallet.slice(0, 12) + "…";
+        msg +=
+          `\n*${label}*\n` +
+          `  seeded: ${w.seeded ? "✅" : "❌"} | seen: ${w.seenCount}\n` +
+          `  last trade: ${fmtAgo(w.lastTsAgoSec)} ago | last poll: ${fmtAgo(w.lastPollAgoSec)} ago\n` +
+          `  fetched: ${w.fetched} | new: ${w.newDetected}\n`;
+      }
+    }
+
+    if (
+      d.watchers.every((w: any) => w.newDetected === 0) &&
+      d.watchers.length > 0
+    ) {
+      msg +=
+        `\n_💡 Никой wallet не е направил нов trade откакто bot-ът работи. ` +
+        `Ако очакваш активност — провери ги ръчно в polymarket.com._`;
+    }
+
+    this.editOrReply(ctx, msg, this.refreshBtn("refresh:debug"));
   }
 
   // ─── Help ─────────────────────────────────────────────────────────────────────
@@ -691,6 +850,7 @@ export class TelegramBot {
         `/wset 0x... label "Whale #1"\n\n` +
         `/pnl | /history [n] | /status\n` +
         `/orders — активни поръчки\n` +
+        `/debug — watcher diagnostics\n` +
         `/dryrun on|off | /settings`,
       { parse_mode: "Markdown" },
     );
