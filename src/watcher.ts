@@ -51,6 +51,11 @@ class WalletWatcher {
       if (t.timestamp > this.lastTs) this.lastTs = t.timestamp;
     }
     this.newCount += newTrades.length;
+    if (process.env.DEBUG_POLL === "1") {
+      console.log(
+        `[Watcher] poll ${this.wallet.slice(0, 10)}… returned=${trades.length} new=${newTrades.length} seen=${this.seen.size}`,
+      );
+    }
     return newTrades;
   }
 }
@@ -96,6 +101,8 @@ export class CopyTrader {
       walletCfgs: this.cfgStore, // pass reference directly — always defined
       getOrders: () => getOpenOrders(),
       getDebug: () => this.getDebug(),
+      peekTrades: (w, n) => this.peekTrades(w, n),
+      forceCopyLast: (w) => this.forceCopyLast(w),
     });
   }
 
@@ -355,6 +362,65 @@ export class CopyTrader {
   }
   getHistory() {
     return this.history;
+  }
+
+  /**
+   * Returns the most recent N trades from the data-api for a wallet — raw,
+   * unfiltered by `seen`. Useful for diagnosing "the bot doesn't see anything".
+   */
+  async peekTrades(wallet: string, n = 5): Promise<Trade[]> {
+    const trades = await getTradesForWallet(wallet);
+    return trades.slice(0, n);
+  }
+
+  /**
+   * Manually trigger a copy of the wallet's most recent trade. Goes through
+   * the same `copyTradeWithSize` path as a real poll — respects DRY_RUN,
+   * sizing, and notifications. Marks the trade as seen so the next poll
+   * doesn't re-copy it.
+   */
+  async forceCopyLast(wallet: string): Promise<{ ok: boolean; msg: string }> {
+    const key = wallet.toLowerCase();
+    const watcher = this.watchers.get(key);
+    if (!watcher) return { ok: false, msg: `Wallet not watched: ${wallet}` };
+
+    const trades = await getTradesForWallet(wallet);
+    if (trades.length === 0)
+      return { ok: false, msg: "No trades found from API" };
+
+    // Most recent first (API order)
+    const trade = trades[0];
+    const cfg = this.cfgStore.get(wallet);
+    const copySize = this.cfgStore.calcSize(wallet, trade.size);
+
+    console.log(
+      `[ForceCopy] ${wallet.slice(0, 10)}… ${trade.side} ${trade.size} @ ${trade.price} → copy $${copySize.toFixed(2)} (dry=${config.dryRun})`,
+    );
+
+    const result = await copyTradeWithSize(trade, copySize);
+    result.sourceWallet = wallet;
+    (result as any).copySize = copySize;
+    this.history.push(result);
+    this.saveHistory();
+    watcher.seen.add(trade.id);
+
+    const marketInfo = await getMarketInfo(trade.tokenId, trade.market);
+    const question = marketInfo?.question ?? "";
+    await this.tg.notifyNewTrade(
+      wallet,
+      cfg?.label,
+      trade.side,
+      copySize,
+      trade.price,
+      question,
+      result.status,
+      result.orderId,
+    );
+
+    return {
+      ok: true,
+      msg: `${result.status}${result.reason ? " — " + result.reason : ""}`,
+    };
   }
 }
 

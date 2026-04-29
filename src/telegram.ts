@@ -136,6 +136,10 @@ type GetPnLFn = () => PnLTracker;
 type SetDryRunFn = (val: boolean) => void;
 type GetOrdersFn = () => Promise<any[]>;
 type GetDebugFn = () => any;
+type PeekTradesFn = (wallet: string, n?: number) => Promise<any[]>;
+type ForceCopyLastFn = (
+  wallet: string,
+) => Promise<{ ok: boolean; msg: string }>;
 
 type Step = {
   type: "set_wallet_field";
@@ -157,6 +161,8 @@ export class TelegramBot {
   private setDryRun!: SetDryRunFn;
   private getOrders!: GetOrdersFn;
   private getDebug!: GetDebugFn;
+  private peekTrades!: PeekTradesFn;
+  private forceCopyLast!: ForceCopyLastFn;
   private walletCfgs!: WalletConfigStore;
 
   constructor() {
@@ -175,6 +181,8 @@ export class TelegramBot {
     setDryRun: SetDryRunFn;
     getOrders: GetOrdersFn;
     getDebug: GetDebugFn;
+    peekTrades: PeekTradesFn;
+    forceCopyLast: ForceCopyLastFn;
     walletCfgs: WalletConfigStore;
   }) {
     Object.assign(this, callbacks);
@@ -460,6 +468,17 @@ export class TelegramBot {
 
     // Debug — watcher state, useful when "nothing is happening"
     b.command("debug", (ctx) => this.handleDebug(ctx));
+
+    // Peek — show last N trades the API returns for a wallet (no `seen` filter)
+    b.command("peek", (ctx) => {
+      const parts = ctx.message.text.split(/\s+/);
+      this.handlePeek(ctx, parts[1], parseInt(parts[2] || "5"));
+    });
+
+    // Forcecopy — manually trigger copy of the wallet's most recent trade
+    b.command("forcecopy", (ctx) => {
+      this.handleForceCopy(ctx, ctx.message.text.split(/\s+/)[1]);
+    });
 
     // ── Admin shell commands (whitelisted) ───────────────────────────────────
     for (const key of Object.keys(ADMIN_COMMANDS)) {
@@ -977,6 +996,9 @@ export class TelegramBot {
         `/orders — активни поръчки\n` +
         `/debug — watcher diagnostics\n` +
         `/dryrun on|off | /settings\n\n` +
+        `*Diagnostics:*\n` +
+        `/peek 0x... [n] — последни trade-ове от API\n` +
+        `/forcecopy 0x... — ръчно копирай последния trade\n\n` +
         `*Admin (server):*\n` +
         `/admin — меню с бутони\n` +
         `/pull /reload /restart /deploy\n` +
@@ -984,6 +1006,57 @@ export class TelegramBot {
         `/gitstatus /gitlog /uptime /disk`,
       { parse_mode: "Markdown" },
     );
+  }
+
+  // ─── Diagnostics: peek & forcecopy ──────────────────────────────────────────
+  private async handlePeek(ctx: Context, wallet: string, n: number) {
+    if (!this.allowed(ctx)) return;
+    if (!wallet || !wallet.startsWith("0x")) {
+      ctx.reply("Употреба: `/peek 0xWALLET [n]`", { parse_mode: "Markdown" });
+      return;
+    }
+    const limit = Math.min(Math.max(n || 5, 1), 20);
+    await this.replyTo(
+      ctx,
+      `⏳ Peek \`${wallet.slice(0, 14)}…\` (last ${limit})`,
+    );
+    try {
+      const trades = await this.peekTrades(wallet, limit);
+      if (!trades || trades.length === 0) {
+        await this.replyTo(ctx, "❌ API върна 0 trade-а.");
+        return;
+      }
+      const lines = trades.map((t: any) => {
+        const ageSec = Math.floor(Date.now() / 1000 - t.timestamp);
+        const ageMin = Math.floor(ageSec / 60);
+        const age =
+          ageMin < 60
+            ? `${ageMin}m ago`
+            : `${Math.floor(ageMin / 60)}h${ageMin % 60}m ago`;
+        return `• *${t.side}* $${t.size.toFixed(2)} @ ${t.price} _(${age})_\n  \`${t.id.slice(0, 32)}…\``;
+      });
+      await this.replyTo(
+        ctx,
+        `📡 *Peek result (${trades.length}):*\n\n${lines.join("\n")}`,
+      );
+    } catch (err: any) {
+      await this.replyTo(ctx, `❌ Peek failed: \`${err.message}\``);
+    }
+  }
+
+  private async handleForceCopy(ctx: Context, wallet: string) {
+    if (!this.allowed(ctx)) return;
+    if (!wallet || !wallet.startsWith("0x")) {
+      ctx.reply("Употреба: `/forcecopy 0xWALLET`", { parse_mode: "Markdown" });
+      return;
+    }
+    await this.replyTo(ctx, `⏳ ForceCopy \`${wallet.slice(0, 14)}…\` …`);
+    try {
+      const res = await this.forceCopyLast(wallet);
+      await this.replyTo(ctx, res.ok ? `✅ ${res.msg}` : `❌ ${res.msg}`);
+    } catch (err: any) {
+      await this.replyTo(ctx, `❌ ForceCopy failed: \`${err.message}\``);
+    }
   }
 
   // ─── Admin: whitelisted shell commands ───────────────────────────────────────
