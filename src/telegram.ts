@@ -897,8 +897,7 @@ export class TelegramBot {
       display = `Label = "${value}"`;
     } else {
       const num = parseFloat(value);
-      if (isNaN(num) || num < 0)
-        return this.replyTo(ctx, "❌ Invalid value.");
+      if (isNaN(num) || num < 0) return this.replyTo(ctx, "❌ Invalid value.");
       if (field === "multiplier") {
         patch = { sizeMultiplier: num, sizePercent: 0, copySizeUsdc: 0 }; // clear others
         display = `Multiplier = ${num}x (Fixed/% cleared)`;
@@ -1066,9 +1065,7 @@ export class TelegramBot {
 
     const pages = paginateItems(items);
     const safePage = Math.max(0, Math.min(page, pages.length - 1));
-    const totalLabel = n
-      ? `last ${subset.length}`
-      : `all ${subset.length}`;
+    const totalLabel = n ? `last ${subset.length}` : `all ${subset.length}`;
     const header = `📜 *History (${totalLabel})* — page ${safePage + 1}/${pages.length}\n\n`;
     const msg = header + pages[safePage].join("\n\n");
     this.editOrReply(
