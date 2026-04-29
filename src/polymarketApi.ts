@@ -1,14 +1,8 @@
 import axios from "axios";
 import * as https from "https";
 import { Trade, MarketInfo } from "./types";
-import { config } from "./config";
 
 const directAgent = new https.Agent();
-
-// When PROXY_URL is empty we don't want axios to silently honour
-// HTTPS_PROXY/HTTP_PROXY env vars (e.g. Termux had one pointing to
-// 127.0.0.1:443, which produced ECONNREFUSED on every request).
-const proxyOpt: false | undefined = config.proxyUrl ? undefined : false;
 
 const DATA_API = "https://data-api.polymarket.com";
 const CLOB_API = "https://clob.polymarket.com";
@@ -42,7 +36,6 @@ export async function getTradesForWallet(
       params,
       timeout: 10_000,
       httpsAgent: directAgent,
-      proxy: proxyOpt,
     });
 
     const raw: any[] = Array.isArray(res.data)
@@ -108,7 +101,6 @@ export async function getMarketInfo(
     const res = await axios.get(`${CLOB_API}/markets/${lookupId}`, {
       timeout: 10_000,
       httpsAgent: directAgent,
-      proxy: proxyOpt,
     });
     const d = res.data;
     // Find the specific outcome for this tokenId from the tokens array
