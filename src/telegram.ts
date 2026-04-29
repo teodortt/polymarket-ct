@@ -441,12 +441,66 @@ export class TelegramBot {
       this.steps.delete(this.uid(ctx));
       ctx.reply("🤖 *Polymarket CopyBot*\n\nChoose an action:", {
         parse_mode: "Markdown",
-        ...Markup.keyboard([
-          ["📋 Wallets", "➕ Add wallet", "➖ Remove wallet"],
-          ["📊 P&L", "📜 History", "⚙️ Settings"],
-          ["ℹ️ Status", "❓ Help"],
-        ]).resize(),
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback("📋 Wallets", "menu:wallets"),
+            Markup.button.callback("➕ Add", "menu:add"),
+            Markup.button.callback("➖ Remove", "menu:remove"),
+          ],
+          [
+            Markup.button.callback("📊 P&L", "menu:pnl"),
+            Markup.button.callback("📜 History", "menu:history"),
+            Markup.button.callback("📂 Orders", "menu:orders"),
+          ],
+          [
+            Markup.button.callback("⚙️ Settings", "menu:settings"),
+            Markup.button.callback("ℹ️ Status", "menu:status"),
+            Markup.button.callback("❓ Help", "menu:help"),
+          ],
+        ]),
       });
+    });
+
+    // Inline menu actions
+    b.action(/^menu:(.+)$/, async (ctx) => {
+      if (!this.allowed(ctx)) return ctx.answerCbQuery();
+      await ctx.answerCbQuery();
+      const key = (ctx.match as RegExpMatchArray)[1];
+      switch (key) {
+        case "wallets":
+          return this.handleWallets(ctx);
+        case "add":
+          return ctx.reply(
+            "Send:\n`/add 0xWALLET` or\n`/add 0xWALLET Whale #1`",
+            { parse_mode: "Markdown" },
+          );
+        case "remove": {
+          const cfgs = this.walletCfgs.getAll();
+          if (cfgs.length === 0) return ctx.reply("No wallets to remove.");
+          const buttons = cfgs.map((c) =>
+            Markup.button.callback(
+              `${c.label ? c.label + " " : ""}${c.wallet.slice(0, 10)}…`,
+              `remove:${c.wallet}`,
+            ),
+          );
+          return ctx.reply(
+            "Choose a wallet to remove:",
+            Markup.inlineKeyboard(buttons, { columns: 1 }),
+          );
+        }
+        case "pnl":
+          return this.handlePnl(ctx, 0);
+        case "history":
+          return this.handleHistory(ctx, undefined, 0);
+        case "orders":
+          return this.handleOrders(ctx);
+        case "settings":
+          return this.handleSettings(ctx);
+        case "status":
+          return this.handleStatus(ctx);
+        case "help":
+          return this.handleHelp(ctx);
+      }
     });
 
     // Wallets list
