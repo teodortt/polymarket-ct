@@ -17,7 +17,7 @@ export async function getTradesForWallet(
     walletAddress.startsWith("0xtarget") ||
     walletAddress.length < 10
   ) {
-    console.error("[API] TARGET_WALLET is not set properly in .env!");
+    console.error("[API] TARGET_WALLETS is not set properly in .env!");
     return [];
   }
 

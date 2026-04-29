@@ -75,18 +75,21 @@ export class TelegramBot {
     } as any);
   }
 
-  // Helper — edit message if in callback context, else send new
+  // Helper — edit message if in callback context, else send new.
+  // Silently swallows "message is not modified" so refresh never duplicates.
   private async editOrReply(ctx: Context, text: string, extra?: object) {
     const fullExtra = { parse_mode: "Markdown" as const, ...(extra ?? {}) };
-    if (
-      "editMessageText" in ctx &&
-      typeof (ctx as any).editMessageText === "function"
-    ) {
+    const isCallback =
+      "callbackQuery" in ctx && (ctx as any).callbackQuery != null;
+    if (isCallback) {
       try {
         await (ctx as any).editMessageText(text, fullExtra);
         return;
-      } catch {
-        /* fall through */
+      } catch (err: any) {
+        const msg = String(err?.description || err?.message || "");
+        // Identical content — nothing to do, keep the existing message.
+        if (msg.includes("message is not modified")) return;
+        // Otherwise fall through and post a fresh message.
       }
     }
     await this.replyTo(ctx, text, fullExtra);
@@ -367,6 +370,12 @@ export class TelegramBot {
         Markup.button.callback("✏️ Fixed size", `cfgset:${wallet}:copyusdc`),
       ],
       [Markup.button.callback("✏️ Label", `cfgset:${wallet}:label`)],
+      [
+        Markup.button.url(
+          "🔗 Open in Polymarket",
+          `https://polymarket.com/profile/${wallet}`,
+        ),
+      ],
       [Markup.button.callback("🗑 Remove", `remove:${wallet}`)],
     ];
 
@@ -474,7 +483,12 @@ export class TelegramBot {
     const pnl = this.getPnL();
     await pnl.refreshPrices();
     const positions = pnl.getPositions();
-    if (positions.length === 0) return ctx.reply("📊 Няма активни позиции.");
+    if (positions.length === 0)
+      return this.editOrReply(
+        ctx,
+        "📊 Няма активни позиции.",
+        this.refreshBtn("refresh:pnl"),
+      );
 
     let msg = `📊 *P&L Summary*\n\n`;
     let totalInvested = 0,
@@ -508,8 +522,10 @@ export class TelegramBot {
     const records = pnl.getDailyByWallet(allDays);
 
     if (records.length === 0) {
-      return ctx.reply(
+      return this.editOrReply(
+        ctx,
         allDays ? "📅 Няма записани дни." : "📅 Няма trades за днес.",
+        this.refreshBtn("refresh:daily"),
       );
     }
 
@@ -553,7 +569,12 @@ export class TelegramBot {
   private handleHistory(ctx: Context, n: number) {
     if (!this.allowed(ctx)) return;
     const history = this.getHistory();
-    if (history.length === 0) return ctx.reply("📜 Няма история.");
+    if (history.length === 0)
+      return this.editOrReply(
+        ctx,
+        "📜 Няма история.",
+        this.refreshBtn("refresh:history"),
+      );
     const icons: Record<string, string> = {
       PLACED: "✅",
       FAILED: "❌",
@@ -577,9 +598,23 @@ export class TelegramBot {
   // ─── Orders ──────────────────────────────────────────────────────────────────
   private async handleOrders(ctx: Context) {
     if (!this.allowed(ctx)) return;
-    await ctx.reply("⏳ Зареждам активни поръчки…", { parse_mode: "Markdown" });
+    const isCallback =
+      "callbackQuery" in ctx && (ctx as any).callbackQuery != null;
+    // Only show the "loading" hint on the first invocation, not on refresh
+    // (refresh edits the existing message in place).
+    if (!isCallback) {
+      await ctx.reply("⏳ Зареждам активни поръчки…", {
+        parse_mode: "Markdown",
+      });
+    }
     const orders = await this.getOrders();
-    if (orders.length === 0) return ctx.reply("📂 Няма активни поръчки.");
+    if (orders.length === 0) {
+      return this.editOrReply(
+        ctx,
+        "📂 Няма активни поръчки.",
+        this.refreshBtn("refresh:orders"),
+      );
+    }
 
     const sides: Record<string, string> = { BUY: "🟢 BUY", SELL: "🔴 SELL" };
     let msg = `📂 *Активни поръчки (${orders.length}):*\n\n`;
@@ -616,13 +651,14 @@ export class TelegramBot {
             .join("\n")
         : "  (няма)";
 
-    ctx.reply(
+    this.editOrReply(
+      ctx,
       `ℹ️ *Bot Status*\n\n` +
         `🟢 Running | Dry: ${config.dryRun ? "🔵 ON" : "🔴 OFF"}\n` +
         `Poll: ${config.pollIntervalMs / 1000}s\n\n` +
         `*Wallets (${cfgs.length}):*\n${wList}\n\n` +
         `✅ ${placed} | ❌ ${failed} | 📦 ${history.length}`,
-      { parse_mode: "Markdown", ...this.refreshBtn("refresh:status") },
+      this.refreshBtn("refresh:status"),
     );
   }
 

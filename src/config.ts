@@ -8,15 +8,12 @@ function required(key: string): string {
 }
 
 function parseTargetWallets(): string[] {
-  const multi = process.env.TARGET_WALLETS;
-  if (multi)
-    return multi
-      .split(",")
-      .map((w) => w.trim())
-      .filter(Boolean);
-  const single = process.env.TARGET_WALLET;
-  if (single) return [single.trim()];
-  return []; // allowed — can be added later via Telegram
+  const raw = process.env.TARGET_WALLETS;
+  if (!raw) return []; // allowed — can be added later via Telegram
+  return raw
+    .split(",")
+    .map((w) => w.trim())
+    .filter(Boolean);
 }
 
 export const config = {
