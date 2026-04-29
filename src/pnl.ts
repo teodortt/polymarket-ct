@@ -1,6 +1,10 @@
 import axios from "axios";
+import { config } from "./config";
 
 const CLOB_API = "https://clob.polymarket.com";
+
+// Empty PROXY_URL -> tell axios to ignore HTTPS_PROXY/HTTP_PROXY env vars.
+const proxyOpt: false | undefined = config.proxyUrl ? undefined : false;
 
 export interface Position {
   tokenId: string;
@@ -126,6 +130,7 @@ export class PnLTracker {
         const res = await axios.get(`${CLOB_API}/price`, {
           params: { token_id: pos.tokenId, side: "BUY" },
           timeout: 5000,
+          proxy: proxyOpt,
         });
         const currentPrice = parseFloat(res.data?.price ?? "0");
         if (currentPrice > 0) {
