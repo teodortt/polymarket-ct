@@ -7,7 +7,7 @@ import { initTrader } from "./trader";
 async function main() {
   // Apply WARP SOCKS5 proxy before any network calls
   if (config.proxyUrl) {
-    setupProxy(config.proxyUrl);
+    await setupProxy(config.proxyUrl);
     await verifyProxy();
   }
   console.log("=".repeat(50));

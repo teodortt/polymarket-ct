@@ -1,12 +1,23 @@
 import axios from "axios";
-import { SocksProxyAgent } from "socks-proxy-agent";
+import type { Agent as HttpAgent } from "http";
 
-let agent: SocksProxyAgent | null = null;
+// socks-proxy-agent v10 is ESM-only. Load it via a real dynamic import so the
+// TypeScript CommonJS emitter does not rewrite it to require().
+const importEsm = new Function("specifier", "return import(specifier)") as <
+  T = unknown,
+>(
+  specifier: string,
+) => Promise<T>;
 
-export function setupProxy(proxyUrl: string): void {
+let agent: HttpAgent | null = null;
+
+export async function setupProxy(proxyUrl: string): Promise<void> {
   if (!proxyUrl) return;
 
-  agent = new SocksProxyAgent(proxyUrl);
+  const mod = await importEsm<{
+    SocksProxyAgent: new (url: string) => HttpAgent;
+  }>("socks-proxy-agent");
+  agent = new mod.SocksProxyAgent(proxyUrl);
 
   // Inject SOCKS agent into every axios request that doesn't already have one.
   // polymarketApi.ts sets directAgent explicitly to bypass this.
@@ -37,6 +48,6 @@ export async function verifyProxy(): Promise<void> {
   }
 }
 
-export function getProxyAgent(): SocksProxyAgent | undefined {
+export function getProxyAgent(): HttpAgent | undefined {
   return agent ?? undefined;
 }
