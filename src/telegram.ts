@@ -90,6 +90,24 @@ const ADMIN_COMMANDS: Record<string, AdminCmd> = {
   },
 };
 
+// Detect Telegram "can't parse entities" errors so we can transparently
+// retry the same message as plain text. Without this, a single unbalanced
+// underscore in a wallet label or trade reason kills the whole handler
+// and the bot process — pm2 then restarts it, looking like a duplicate
+// instance to the user.
+function isParseError(err: any): boolean {
+  if (!err) return false;
+  const code = err.code ?? err.response?.error_code;
+  const desc: string =
+    err.description || err.response?.description || err.message || "";
+  return (
+    code === 400 &&
+    /parse entities|find end of the entity|unsupported start tag|byte offset/i.test(
+      desc,
+    )
+  );
+}
+
 function runOne(
   file: string,
   args: string[],
@@ -206,6 +224,14 @@ export class TelegramBot {
   constructor() {
     this.bot = new Telegraf(config.telegramBotToken);
     this.allowedChatId = config.telegramChatId;
+    // Catch-all so a single bad update never crashes the polling loop.
+    // Without this, an unhandled error in a handler exits the process and
+    // pm2 restarts it — looking like a duplicate "CopyBot started" event.
+    this.bot.catch((err: any, ctx) => {
+      const desc = err?.description || err?.message || String(err);
+      console.error(`[Telegram] handler error on ${ctx.updateType}: ${desc}`);
+      if (err?.stack) console.error(err.stack);
+    });
     this.setupCommands();
   }
 
@@ -241,10 +267,30 @@ export class TelegramBot {
   private async replyTo(ctx: Context, text: string, extra?: object) {
     const chatId = ctx.chat?.id;
     if (!chatId) return;
-    await this.bot.telegram.sendMessage(chatId, text, {
-      parse_mode: "Markdown",
-      ...(extra ?? {}),
-    } as any);
+    const opts = { parse_mode: "Markdown" as const, ...(extra ?? {}) };
+    try {
+      await this.bot.telegram.sendMessage(chatId, text, opts as any);
+    } catch (err: any) {
+      if (isParseError(err)) {
+        // Strip Markdown and retry. Better to deliver an unstyled message
+        // than to throw and crash the handler.
+        console.warn(
+          `[Telegram] Markdown parse failed, retrying plain: ${err.description || err.message}`,
+        );
+        const { parse_mode, ...rest } = opts as any;
+        void parse_mode;
+        try {
+          await this.bot.telegram.sendMessage(chatId, text, rest);
+        } catch (err2: any) {
+          console.error(
+            "[Telegram] Plain-text fallback also failed:",
+            err2.message,
+          );
+        }
+      } else {
+        console.error("[Telegram] sendMessage failed:", err.message);
+      }
+    }
   }
 
   // Helper — edit message if in callback context, else send new.
@@ -261,6 +307,20 @@ export class TelegramBot {
         const msg = String(err?.description || err?.message || "");
         // Identical content — nothing to do, keep the existing message.
         if (msg.includes("message is not modified")) return;
+        // Markdown parse error — retry edit as plain text.
+        if (isParseError(err)) {
+          console.warn(
+            `[Telegram] editMessageText Markdown failed, retrying plain: ${msg}`,
+          );
+          const { parse_mode, ...rest } = fullExtra as any;
+          void parse_mode;
+          try {
+            await (ctx as any).editMessageText(text, rest);
+            return;
+          } catch {
+            /* fall through to fresh reply below */
+          }
+        }
         // Otherwise fall through and post a fresh message.
       }
     }
@@ -1115,7 +1175,21 @@ export class TelegramBot {
         parse_mode: "Markdown",
       });
     } catch (err: any) {
-      console.error("[Telegram] Send failed:", err.message);
+      if (isParseError(err)) {
+        console.warn(
+          `[Telegram] send() Markdown parse failed, retrying plain: ${err.description || err.message}`,
+        );
+        try {
+          await this.bot.telegram.sendMessage(this.allowedChatId, text);
+        } catch (err2: any) {
+          console.error(
+            "[Telegram] send() plain-text fallback failed:",
+            err2.message,
+          );
+        }
+      } else {
+        console.error("[Telegram] Send failed:", err.message);
+      }
     }
   }
 
