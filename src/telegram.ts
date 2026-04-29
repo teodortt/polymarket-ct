@@ -439,7 +439,7 @@ export class TelegramBot {
     b.command(["start", "menu"], (ctx) => {
       if (!this.allowed(ctx)) return;
       this.steps.delete(this.uid(ctx));
-      ctx.reply("🤖 *Polymarket CopyBot*\n\nИзбери действие:", {
+      ctx.reply("🤖 *Polymarket CopyBot*\n\nChoose an action:", {
         parse_mode: "Markdown",
         ...Markup.keyboard([
           ["📋 Wallets", "➕ Add wallet", "➖ Remove wallet"],
@@ -462,7 +462,7 @@ export class TelegramBot {
     });
     b.hears("➕ Add wallet", (ctx) => {
       if (!this.allowed(ctx)) return;
-      ctx.reply("Изпрати:\n`/add 0xWALLET` или\n`/add 0xWALLET Whale #1`", {
+      ctx.reply("Send:\n`/add 0xWALLET` or\n`/add 0xWALLET Whale #1`", {
         parse_mode: "Markdown",
       });
     });
@@ -474,7 +474,7 @@ export class TelegramBot {
     b.hears("➖ Remove wallet", (ctx) => {
       if (!this.allowed(ctx)) return;
       const cfgs = this.walletCfgs.getAll();
-      if (cfgs.length === 0) return ctx.reply("Няма wallets за премахване.");
+      if (cfgs.length === 0) return ctx.reply("No wallets to remove.");
       const buttons = cfgs.map((c) =>
         Markup.button.callback(
           `${c.label ? c.label + " " : ""}${c.wallet.slice(0, 10)}…`,
@@ -482,7 +482,7 @@ export class TelegramBot {
         ),
       );
       ctx.reply(
-        "Избери wallet за премахване:",
+        "Choose a wallet to remove:",
         Markup.inlineKeyboard(buttons, { columns: 1 }),
       );
     });
@@ -533,13 +533,13 @@ export class TelegramBot {
         field,
       });
       const labels: Record<string, string> = {
-        multiplier: "Size multiplier (напр. 0.5 или 2)",
-        maxusdc: "Max USDC на trade (напр. 100)",
-        copyusdc: "Фиксиран USDC (0 = изключено)",
-        percent: "% от trader размера (1–100, 0 = изключено)",
-        label: "Label (напр. Whale #1)",
+        multiplier: "Size multiplier (e.g. 0.5 or 2)",
+        maxusdc: "Max USDC per trade (e.g. 100)",
+        copyusdc: "Fixed USDC (0 = disabled)",
+        percent: "% of trader size (1–100, 0 = disabled)",
+        label: "Label (e.g. Whale #1)",
       };
-      this.replyTo(ctx, `✏️ Въведи стойност за *${labels[field]}*:`);
+      this.replyTo(ctx, `✏️ Enter value for *${labels[field]}*:`);
     });
 
     // Inline: remove → show confirmation panel
@@ -554,11 +554,11 @@ export class TelegramBot {
       if (!this.allowed(ctx)) return;
       const wallet = ctx.match[1];
       const res = this.removeWallet(wallet);
-      ctx.answerCbQuery(res.ok ? "Премахнат" : "Грешка").catch(() => {});
+      ctx.answerCbQuery(res.ok ? "Removed" : "Error").catch(() => {});
       this.editOrReply(
         ctx,
         res.ok
-          ? `✅ ${res.msg}\n\n_Open positions/orders са оставени непокътнати._`
+          ? `✅ ${res.msg}\n\n_Open positions/orders left untouched._`
           : `❌ ${res.msg}`,
       );
     });
@@ -575,7 +575,7 @@ export class TelegramBot {
         cancelRes.ok
           ? `🗑 Cancelled orders: *${cancelRes.cancelled}*`
           : `⚠️ Cancel failed: _${cancelRes.reason ?? "?"}_`,
-        `_Already-filled позиции остават в акаунта ти._`,
+        `_Already-filled positions remain in your account._`,
       ];
       this.editOrReply(ctx, lines.join("\n"));
     });
@@ -583,7 +583,7 @@ export class TelegramBot {
     // Inline: cancel the remove action — return to wallet config panel
     b.action(/^rmabort:(.+)$/, (ctx) => {
       if (!this.allowed(ctx)) return;
-      ctx.answerCbQuery("Отказано").catch(() => {});
+      ctx.answerCbQuery("Cancelled").catch(() => {});
       this.showWalletConfig(ctx, ctx.match[1]);
     });
 
@@ -625,10 +625,10 @@ export class TelegramBot {
         ctx.reply("🔵 Dry run *ON*", { parse_mode: "Markdown" });
       } else if (arg === "off") {
         this.setDryRun(false);
-        ctx.reply("🔴 Dry run *OFF* — РЕАЛНИ ордери!", {
+        ctx.reply("🔴 Dry run *OFF* — REAL ORDERS!", {
           parse_mode: "Markdown",
         });
-      } else ctx.reply("Употреба: /dryrun on|off");
+      } else ctx.reply("Usage: /dryrun on|off");
     });
 
     // Refresh callbacks
@@ -716,14 +716,14 @@ export class TelegramBot {
     if (!this.allowed(ctx)) return;
     const cfgs = this.walletCfgs.getAll();
     if (cfgs.length === 0)
-      return ctx.reply("📋 Няма следвани wallets.\n/add 0xADDRESS");
+      return ctx.reply("📋 No followed wallets.\n/add 0xADDRESS");
     const buttons = cfgs.map((c) =>
       Markup.button.callback(
         `${c.enabled ? "🟢" : "⏸"} ${c.label || c.wallet.slice(0, 12) + "…"}`,
         `cfg:${c.wallet}`,
       ),
     );
-    ctx.reply(`📋 *Wallets (${cfgs.length}):*\n\nНатисни за настройки:`, {
+    ctx.reply(`📋 *Wallets (${cfgs.length}):*\n\nTap to configure:`, {
       parse_mode: "Markdown",
       ...Markup.inlineKeyboard(buttons, { columns: 1 }),
     });
@@ -733,7 +733,7 @@ export class TelegramBot {
   private showWalletConfig(ctx: Context, wallet: string) {
     const cfg = this.walletCfgs.get(wallet);
     if (!cfg) {
-      this.replyTo(ctx, "❌ Wallet не е намерен.");
+      this.replyTo(ctx, "❌ Wallet not found.");
       return;
     }
 
@@ -803,7 +803,7 @@ export class TelegramBot {
   private async handleAdd(ctx: Context, wallet?: string, label?: string) {
     if (!this.allowed(ctx)) return;
     if (!wallet || !wallet.startsWith("0x") || wallet.length < 20) {
-      return ctx.reply("❌ Невалиден адрес.\n`/add 0xWALLET [Label]`", {
+      return ctx.reply("❌ Invalid address.\n`/add 0xWALLET [Label]`", {
         parse_mode: "Markdown",
       });
     }
@@ -818,9 +818,9 @@ export class TelegramBot {
   private handleRemove(ctx: Context, wallet?: string) {
     if (!this.allowed(ctx)) return;
     if (!wallet || !wallet.startsWith("0x"))
-      return ctx.reply("Употреба: /remove 0xWALLET");
+      return ctx.reply("Usage: /remove 0xWALLET");
     if (!this.walletCfgs.has(wallet))
-      return ctx.reply(`❌ Wallet не се следва: \`${wallet}\``, {
+      return ctx.reply(`❌ Wallet not followed: \`${wallet}\``, {
         parse_mode: "Markdown",
       });
     this.showRemoveConfirm(ctx, wallet);
@@ -841,14 +841,14 @@ export class TelegramBot {
       );
 
     const text =
-      `⚠️ *Премахване на wallet*\n\n` +
+      `⚠️ *Remove wallet*\n\n` +
       `${label}\`${wallet}\`\n\n` +
       `• Copied trades: *${exposure.copiedTrades}*\n` +
       `• Tracked positions: *${positions.length}*\n` +
       `• Open orders placed by bot: *${exposure.placedOrderIds.length}*\n\n` +
-      `*Какво искаш да стане?*\n` +
-      `_• "Just stop" → бъдещи trades няма да се копират; всички текущи orders/позиции остават._\n` +
-      `_• "Stop & Cancel orders" → +отменя open поръчки от този wallet (без да продава вече купеното)._`;
+      `*What do you want to do?*\n` +
+      `_• "Just stop" → future trades won't be copied; all current orders/positions stay._\n` +
+      `_• "Stop & Cancel orders" → also cancels open orders from this wallet (does not sell already-bought shares)._`;
 
     const buttons = [
       [Markup.button.callback("🛑 Just stop following", `rmkeep:${wallet}`)],
@@ -858,7 +858,7 @@ export class TelegramBot {
           `rmcancel:${wallet}`,
         ),
       ],
-      [Markup.button.callback("↩️ Отказ", `rmabort:${wallet}`)],
+      [Markup.button.callback("↩️ Cancel", `rmabort:${wallet}`)],
     ];
 
     this.editOrReply(ctx, text, Markup.inlineKeyboard(buttons));
@@ -882,11 +882,11 @@ export class TelegramBot {
     if (!validFields.includes(field)) {
       return this.replyTo(
         ctx,
-        `❌ Невалидно поле: \`${field}\`\nПозволени: ${validFields.join(", ")}`,
+        `❌ Invalid field: \`${field}\`\nAllowed: ${validFields.join(", ")}`,
       );
     }
     if (!wallet || !this.walletCfgs.has(wallet)) {
-      return this.replyTo(ctx, `❌ Wallet не е намерен: \`${wallet}\``);
+      return this.replyTo(ctx, `❌ Wallet not found: \`${wallet}\``);
     }
 
     let patch: Partial<WalletConfig> = {};
@@ -898,10 +898,10 @@ export class TelegramBot {
     } else {
       const num = parseFloat(value);
       if (isNaN(num) || num < 0)
-        return this.replyTo(ctx, "❌ Невалидна стойност.");
+        return this.replyTo(ctx, "❌ Invalid value.");
       if (field === "multiplier") {
         patch = { sizeMultiplier: num, sizePercent: 0, copySizeUsdc: 0 }; // clear others
-        display = `Multiplier = ${num}x (Fixed/% изчистени)`;
+        display = `Multiplier = ${num}x (Fixed/% cleared)`;
       } else if (field === "maxusdc") {
         patch = { maxTradeUsdc: num };
         display = `Max USDC = $${num}`;
@@ -909,16 +909,16 @@ export class TelegramBot {
         patch = { copySizeUsdc: num, sizePercent: 0 }; // clear percent
         display =
           num > 0
-            ? `Fixed size = $${num} (% mode изчистен)`
-            : "Fixed size изключен";
+            ? `Fixed size = $${num} (% mode cleared)`
+            : "Fixed size disabled";
       } else if (field === "percent") {
         if (num < 0 || num > 100)
-          return this.replyTo(ctx, "❌ Въведи число от 0 до 100.");
+          return this.replyTo(ctx, "❌ Enter a number between 0 and 100.");
         patch = { sizePercent: num, copySizeUsdc: 0 }; // clear fixed size
         display =
           num > 0
-            ? `${num}% от trader размера (Fixed size изчистен)`
-            : "% mode изключен";
+            ? `${num}% of trader size (Fixed size cleared)`
+            : "% mode disabled";
       }
     }
 
@@ -940,7 +940,7 @@ export class TelegramBot {
     if (positions.length === 0)
       return this.editOrReply(
         ctx,
-        "📊 Няма активни позиции.",
+        "📊 No active positions.",
         this.refreshBtn("refresh:pnl"),
       );
 
@@ -970,7 +970,7 @@ export class TelegramBot {
 
     const pages = paginateItems(items);
     const safePage = Math.max(0, Math.min(page, pages.length - 1));
-    const header = `📊 *P&L Summary* — стр. ${safePage + 1}/${pages.length}\n\n`;
+    const header = `📊 *P&L Summary* — page ${safePage + 1}/${pages.length}\n\n`;
     // TOTAL belongs only on the last page so totals aren't shown mid-list.
     const footer = safePage === pages.length - 1 ? `\n\n${totalLine}` : "";
     const body = pages[safePage].join("\n\n");
@@ -992,7 +992,7 @@ export class TelegramBot {
     if (records.length === 0) {
       return this.editOrReply(
         ctx,
-        allDays ? "📅 Няма записани дни." : "📅 Няма trades за днес.",
+        allDays ? "📅 No recorded days." : "📅 No trades for today.",
         this.refreshBtn("refresh:daily"),
       );
     }
@@ -1029,7 +1029,7 @@ export class TelegramBot {
       }
     }
 
-    msg += `_/daily — само днес | /dailyall — всички дни_`;
+    msg += `_/daily — today only | /dailyall — all days_`;
     this.editOrReply(ctx, msg, this.refreshBtn("refresh:daily"));
   }
 
@@ -1040,7 +1040,7 @@ export class TelegramBot {
     if (history.length === 0)
       return this.editOrReply(
         ctx,
-        "📜 Няма история.",
+        "📜 No history.",
         this.refreshBtn("refresh:history"),
       );
     const icons: Record<string, string> = {
@@ -1067,9 +1067,9 @@ export class TelegramBot {
     const pages = paginateItems(items);
     const safePage = Math.max(0, Math.min(page, pages.length - 1));
     const totalLabel = n
-      ? `последни ${subset.length}`
-      : `всички ${subset.length}`;
-    const header = `📜 *History (${totalLabel})* — стр. ${safePage + 1}/${pages.length}\n\n`;
+      ? `last ${subset.length}`
+      : `all ${subset.length}`;
+    const header = `📜 *History (${totalLabel})* — page ${safePage + 1}/${pages.length}\n\n`;
     const msg = header + pages[safePage].join("\n\n");
     this.editOrReply(
       ctx,
@@ -1113,7 +1113,7 @@ export class TelegramBot {
     // Only show the "loading" hint on the first invocation, not on refresh
     // (refresh edits the existing message in place).
     if (!isCallback) {
-      await ctx.reply("⏳ Зареждам активни поръчки…", {
+      await ctx.reply("⏳ Loading active orders…", {
         parse_mode: "Markdown",
       });
     }
@@ -1121,13 +1121,13 @@ export class TelegramBot {
     if (orders.length === 0) {
       return this.editOrReply(
         ctx,
-        "📂 Няма активни поръчки.",
+        "📂 No active orders.",
         this.refreshBtn("refresh:orders"),
       );
     }
 
     const sides: Record<string, string> = { BUY: "🟢 BUY", SELL: "🔴 SELL" };
-    let msg = `📂 *Активни поръчки (${orders.length}):*\n\n`;
+    let msg = `📂 *Active orders (${orders.length}):*\n\n`;
     for (const o of orders) {
       const side = sides[o.side?.toUpperCase()] ?? o.side;
       const price = parseFloat(o.price ?? 0).toFixed(4);
@@ -1159,7 +1159,7 @@ export class TelegramBot {
                 `  ${c.enabled ? "🟢" : "⏸"} ${c.label || c.wallet.slice(0, 12) + "…"} ×${c.sizeMultiplier} max$${c.maxTradeUsdc}`,
             )
             .join("\n")
-        : "  (няма)";
+        : "  (none)";
 
     this.editOrReply(
       ctx,
@@ -1181,7 +1181,7 @@ export class TelegramBot {
         `Order type: \`${config.orderType}\`\n` +
         `Poll: \`${config.pollIntervalMs / 1000}s\`\n` +
         `Min trade: \`$${config.minTradeUsdc}\`\n\n` +
-        `Per-wallet: /wallets → избери wallet\n\n` +
+        `Per-wallet: /wallets → pick wallet\n\n` +
         `/dryrun on|off | /debug`,
       { parse_mode: "Markdown" },
     );
@@ -1226,8 +1226,8 @@ export class TelegramBot {
       d.watchers.length > 0
     ) {
       msg +=
-        `\n_💡 Никой wallet не е направил нов trade откакто bot-ът работи. ` +
-        `Ако очакваш активност — провери ги ръчно в polymarket.com._`;
+        `\n_💡 No wallet has made a new trade since the bot started. ` +
+        `If you expect activity — check them manually on polymarket.com._`;
     }
 
     this.editOrReply(ctx, msg, this.refreshBtn("refresh:debug"));
@@ -1237,10 +1237,10 @@ export class TelegramBot {
   private handleHelp(ctx: Context) {
     if (!this.allowed(ctx)) return;
     ctx.reply(
-      `*Команди:*\n\n` +
-        `/wallets — list + per-wallet настройки\n` +
-        `/add 0x... [Label] — добави wallet\n` +
-        `/remove 0x... — премахни wallet\n\n` +
+      `*Commands:*\n\n` +
+        `/wallets — list + per-wallet settings\n` +
+        `/add 0x... [Label] — add wallet\n` +
+        `/remove 0x... — remove wallet\n\n` +
         `*Per-wallet:*\n` +
         `/wset 0x... multiplier 0.5\n` +
         `/wset 0x... maxusdc 50\n` +
@@ -1248,11 +1248,11 @@ export class TelegramBot {
         `/wset 0x... percent 50\n` +
         `/wset 0x... label "Whale #1"\n\n` +
         `/pnl | /history [n] | /status\n` +
-        `/orders — активни поръчки\n` +
+        `/orders — active orders\n` +
         `/debug — watcher diagnostics\n` +
         `/dryrun on|off | /settings\n\n` +
         `*Admin (server):*\n` +
-        `/admin — меню с бутони\n` +
+        `/admin — button menu\n` +
         `/pull /reload /restart /deploy\n` +
         `/applogs /apperrors /pm2list\n` +
         `/gitstatus /gitlog /uptime /disk`,
@@ -1266,7 +1266,7 @@ export class TelegramBot {
     const buttons = Object.entries(ADMIN_COMMANDS).map(([key, cmd]) =>
       Markup.button.callback(cmd.label, `admin:${key}`),
     );
-    ctx.reply("🛠 *Admin*\n\nИзбери команда:", {
+    ctx.reply("🛠 *Admin*\n\nChoose a command:", {
       parse_mode: "Markdown",
       ...Markup.inlineKeyboard(buttons, { columns: 1 }),
     });
@@ -1276,10 +1276,10 @@ export class TelegramBot {
     if (!this.allowed(ctx)) return;
     const cmd = ADMIN_COMMANDS[key];
     if (!cmd) {
-      this.replyTo(ctx, `❌ Непозната команда: \`${key}\``);
+      this.replyTo(ctx, `❌ Unknown command: \`${key}\``);
       return;
     }
-    await this.replyTo(ctx, `⏳ Изпълнявам: *${cmd.label}*`);
+    await this.replyTo(ctx, `⏳ Running: *${cmd.label}*`);
     const output = await runAdminCmd(cmd);
     // Telegram message limit is 4096 chars; keep room for the code fence.
     const MAX = 3800;
@@ -1302,7 +1302,7 @@ export class TelegramBot {
       await this.bot.telegram
         .sendMessage(
           chatId,
-          "♻️ pm2 reload пуснат detached — ботът ще рестартира след малко.",
+          "♻️ pm2 reload launched detached — the bot will restart shortly.",
         )
         .catch(() => {});
     }

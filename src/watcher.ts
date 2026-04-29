@@ -172,7 +172,7 @@ export class CopyTrader {
   ): Promise<{ ok: boolean; msg: string }> {
     const key = wallet.toLowerCase();
     if (this.watchers.has(key))
-      return { ok: false, msg: `Wallet вече се следва: \`${wallet}\`` };
+      return { ok: false, msg: `Wallet already followed: \`${wallet}\`` };
     const watcher = new WalletWatcher(wallet);
     await watcher.seed();
     this.watchers.set(key, watcher);
@@ -180,18 +180,18 @@ export class CopyTrader {
     console.log(`[Watcher] ➕ ${wallet}`);
     return {
       ok: true,
-      msg: `Добавен: \`${wallet}\`${label ? ` (${label})` : ""}`,
+      msg: `Added: \`${wallet}\`${label ? ` (${label})` : ""}`,
     };
   }
 
   removeWallet(wallet: string): { ok: boolean; msg: string } {
     const key = wallet.toLowerCase();
     if (!this.watchers.has(key))
-      return { ok: false, msg: `Не е намерен: \`${wallet}\`` };
+      return { ok: false, msg: `Not found: \`${wallet}\`` };
     this.watchers.delete(key);
     this.cfgStore.remove(wallet);
     console.log(`[Watcher] ➖ ${wallet}`);
-    return { ok: true, msg: `Премахнат: \`${wallet}\`` };
+    return { ok: true, msg: `Removed: \`${wallet}\`` };
   }
 
   /**
