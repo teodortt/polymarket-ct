@@ -1,9 +1,123 @@
 import { Telegraf, Context, Markup } from "telegraf";
 import type { Message } from "telegraf/types";
+import { execFile } from "node:child_process";
+import * as path from "node:path";
 import { config } from "./config";
 import { PnLTracker } from "./pnl";
 import { CopiedTrade, WalletConfig } from "./types";
 import { WalletConfigStore } from "./walletConfig";
+
+// ── Admin shell whitelist ────────────────────────────────────────────────────
+// Only these exact (file, args) tuples can ever be executed. No shell, no
+// user-supplied arguments — completely free of command-injection surface.
+const PM2_APP = "polymarket-copybot";
+const APP_DIR = path.resolve(__dirname, "..");
+
+type AdminCmd = {
+  label: string;
+  file: string;
+  args: string[];
+  // Optional follow-up commands executed sequentially (e.g. deploy chain).
+  then?: { file: string; args: string[] }[];
+  timeoutMs?: number;
+};
+
+const ADMIN_COMMANDS: Record<string, AdminCmd> = {
+  pull: { label: "git pull", file: "git", args: ["pull", "--ff-only"] },
+  gitstatus: { label: "git status", file: "git", args: ["status", "-sb"] },
+  gitlog: {
+    label: "git log -5",
+    file: "git",
+    args: ["log", "--oneline", "-n", "5"],
+  },
+  reload: {
+    label: `pm2 reload ${PM2_APP}`,
+    file: "pm2",
+    args: ["reload", PM2_APP, "--update-env"],
+  },
+  restart: {
+    label: `pm2 restart ${PM2_APP}`,
+    file: "pm2",
+    args: ["restart", PM2_APP, "--update-env"],
+  },
+  stopapp: {
+    label: `pm2 stop ${PM2_APP}`,
+    file: "pm2",
+    args: ["stop", PM2_APP],
+  },
+  startapp: {
+    label: `pm2 start ${PM2_APP}`,
+    file: "pm2",
+    args: ["start", PM2_APP],
+  },
+  pm2list: { label: "pm2 list", file: "pm2", args: ["list"] },
+  applogs: {
+    label: "pm2 logs (last 50)",
+    file: "pm2",
+    args: ["logs", PM2_APP, "--nostream", "--lines", "50"],
+  },
+  apperrors: {
+    label: "pm2 logs --err (last 50)",
+    file: "pm2",
+    args: ["logs", PM2_APP, "--nostream", "--err", "--lines", "50"],
+  },
+  uptime: { label: "uptime", file: "uptime", args: [] },
+  disk: { label: "df -h", file: "df", args: ["-h"] },
+  deploy: {
+    label: "git pull && npm install && pm2 reload",
+    file: "git",
+    args: ["pull", "--ff-only"],
+    then: [
+      { file: "npm", args: ["install", "--no-audit", "--no-fund"] },
+      { file: "pm2", args: ["reload", PM2_APP, "--update-env"] },
+    ],
+    timeoutMs: 180_000,
+  },
+};
+
+function runOne(
+  file: string,
+  args: string[],
+  timeoutMs: number,
+): Promise<{ ok: boolean; out: string }> {
+  return new Promise((resolve) => {
+    execFile(
+      file,
+      args,
+      {
+        cwd: APP_DIR,
+        timeout: timeoutMs,
+        maxBuffer: 1024 * 1024,
+        // No shell — args are passed verbatim, never interpreted.
+        shell: false,
+        env: process.env,
+      },
+      (err, stdout, stderr) => {
+        const out = `${stdout || ""}${stderr ? "\n" + stderr : ""}`.trim();
+        if (err) {
+          resolve({
+            ok: false,
+            out: `${out}\n[exit ${(err as any).code ?? "?"}] ${err.message}`.trim(),
+          });
+        } else {
+          resolve({ ok: true, out: out || "(no output)" });
+        }
+      },
+    );
+  });
+}
+
+async function runAdminCmd(cmd: AdminCmd): Promise<string> {
+  const timeoutMs = cmd.timeoutMs ?? 60_000;
+  const steps = [{ file: cmd.file, args: cmd.args }, ...(cmd.then ?? [])];
+  const chunks: string[] = [];
+  for (const s of steps) {
+    const res = await runOne(s.file, s.args, timeoutMs);
+    chunks.push(`$ ${s.file} ${s.args.join(" ")}\n${res.out}`);
+    if (!res.ok) break; // stop the chain on first failure
+  }
+  return chunks.join("\n\n");
+}
 
 type AddWalletFn = (
   wallet: string,
@@ -346,6 +460,17 @@ export class TelegramBot {
 
     // Debug — watcher state, useful when "nothing is happening"
     b.command("debug", (ctx) => this.handleDebug(ctx));
+
+    // ── Admin shell commands (whitelisted) ───────────────────────────────────
+    for (const key of Object.keys(ADMIN_COMMANDS)) {
+      b.command(key, (ctx) => this.handleAdmin(ctx, key));
+    }
+    b.command("admin", (ctx) => this.handleAdminMenu(ctx));
+    b.action(/^admin:(.+)$/, (ctx) => {
+      if (!this.allowed(ctx)) return;
+      ctx.answerCbQuery().catch(() => {});
+      this.handleAdmin(ctx, ctx.match[1]);
+    });
 
     // Help
     b.command("help", (ctx) => this.handleHelp(ctx));
@@ -851,9 +976,49 @@ export class TelegramBot {
         `/pnl | /history [n] | /status\n` +
         `/orders — активни поръчки\n` +
         `/debug — watcher diagnostics\n` +
-        `/dryrun on|off | /settings`,
+        `/dryrun on|off | /settings\n\n` +
+        `*Admin (server):*\n` +
+        `/admin — меню с бутони\n` +
+        `/pull /reload /restart /deploy\n` +
+        `/applogs /apperrors /pm2list\n` +
+        `/gitstatus /gitlog /uptime /disk`,
       { parse_mode: "Markdown" },
     );
+  }
+
+  // ─── Admin: whitelisted shell commands ───────────────────────────────────────
+  private handleAdminMenu(ctx: Context) {
+    if (!this.allowed(ctx)) return;
+    const buttons = Object.entries(ADMIN_COMMANDS).map(([key, cmd]) =>
+      Markup.button.callback(cmd.label, `admin:${key}`),
+    );
+    ctx.reply("🛠 *Admin*\n\nИзбери команда:", {
+      parse_mode: "Markdown",
+      ...Markup.inlineKeyboard(buttons, { columns: 1 }),
+    });
+  }
+
+  private async handleAdmin(ctx: Context, key: string) {
+    if (!this.allowed(ctx)) return;
+    const cmd = ADMIN_COMMANDS[key];
+    if (!cmd) {
+      this.replyTo(ctx, `❌ Непозната команда: \`${key}\``);
+      return;
+    }
+    await this.replyTo(ctx, `⏳ Изпълнявам: *${cmd.label}*`);
+    const output = await runAdminCmd(cmd);
+    // Telegram message limit is 4096 chars; keep room for the code fence.
+    const MAX = 3800;
+    const truncated =
+      output.length > MAX
+        ? output.slice(0, MAX) + `\n…(+${output.length - MAX} chars truncated)`
+        : output;
+    // Send as plain text (no Markdown) to avoid parsing issues with shell output.
+    const chatId = ctx.chat?.id;
+    if (!chatId) return;
+    await this.bot.telegram.sendMessage(chatId, "```\n" + truncated + "\n```", {
+      parse_mode: "Markdown",
+    } as any);
   }
 
   // ─── Push notifications ───────────────────────────────────────────────────────
