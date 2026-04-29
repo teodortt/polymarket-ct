@@ -1120,7 +1120,11 @@ export class TelegramBot {
   }
 
   async launch() {
-    await this.bot.launch();
+    // dropPendingUpdates: discard everything queued on Telegram's servers
+    // while the bot was offline. Without this, restarting the bot replays
+    // every /reload, /restart, etc. that piled up — causing "ghost" command
+    // executions on startup.
+    await this.bot.launch({ dropPendingUpdates: true });
     console.log("[Telegram] Bot started ✅");
   }
   stop() {
