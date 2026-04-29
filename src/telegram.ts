@@ -771,16 +771,47 @@ export class TelegramBot {
     const cfgs = this.walletCfgs.getAll();
     if (cfgs.length === 0)
       return ctx.reply("📋 No followed wallets.\n/add 0xADDRESS");
-    const buttons = cfgs.map((c) =>
-      Markup.button.callback(
-        `${c.enabled ? "🟢" : "⏸"} ${c.label || c.wallet.slice(0, 12) + "…"}`,
+    const buttons = cfgs.map((c) => {
+      const p = this.walletPnlSummary(c.wallet);
+      const pnlTag =
+        p.positions > 0
+          ? ` ${p.totalPnl >= 0 ? "📈" : "📉"}${p.totalPnl >= 0 ? "+" : ""}$${p.totalPnl.toFixed(2)}`
+          : "";
+      return Markup.button.callback(
+        `${c.enabled ? "🟢" : "⏸"} ${c.label || c.wallet.slice(0, 12) + "…"}${pnlTag}`,
         `cfg:${c.wallet}`,
-      ),
-    );
+      );
+    });
     ctx.reply(`📋 *Wallets (${cfgs.length}):*\n\nTap to configure:`, {
       parse_mode: "Markdown",
       ...Markup.inlineKeyboard(buttons, { columns: 1 }),
     });
+  }
+
+  // Aggregate PnL across all positions sourced (even partly) from this wallet.
+  // Note: position.unrealizedPnl already includes realizedPnl, so it represents
+  // total P&L on that position. When prices haven't been refreshed yet, fall
+  // back to realizedPnl alone.
+  private walletPnlSummary(wallet: string): {
+    totalPnl: number;
+    invested: number;
+    positions: number;
+    openPositions: number;
+  } {
+    const key = wallet.toLowerCase();
+    let totalPnl = 0;
+    let invested = 0;
+    let positions = 0;
+    let openPositions = 0;
+    for (const pos of this.getPnL().getPositions()) {
+      if (!pos.sourceWallets.map((w) => w.toLowerCase()).includes(key))
+        continue;
+      positions++;
+      if (pos.totalShares > 0) openPositions++;
+      totalPnl += pos.unrealizedPnl ?? pos.realizedPnl;
+      invested += pos.totalSizeUsdc;
+    }
+    return { totalPnl, invested, positions, openPositions };
   }
 
   // ─── Wallet config panel ─────────────────────────────────────────────────────
@@ -792,8 +823,15 @@ export class TelegramBot {
     }
 
     const label = cfg.label ? `*${cfg.label}*\n` : "";
+    const p = this.walletPnlSummary(wallet);
+    const pnlLine =
+      p.positions > 0
+        ? `P&L: ${p.totalPnl >= 0 ? "📈 +" : "📉 "}$${p.totalPnl.toFixed(2)} ` +
+          `_(invested $${p.invested.toFixed(2)} • ${p.openPositions}/${p.positions} open)_\n`
+        : `P&L: _no copied trades yet_\n`;
     const text =
       `⚙️ ${label}\`${wallet}\`\n\n` +
+      pnlLine +
       `Status: ${cfg.enabled ? "🟢 Active" : "⏸ Paused"}\n` +
       `Multiplier: \`${cfg.sizeMultiplier}x\`\n` +
       `Max/trade: \`$${cfg.maxTradeUsdc}\`\n` +
