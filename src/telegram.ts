@@ -1,6 +1,6 @@
 import { Telegraf, Context, Markup } from "telegraf";
 import type { Message } from "telegraf/types";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import * as path from "node:path";
 import { config } from "./config";
 import { PnLTracker } from "./pnl";
@@ -13,12 +13,19 @@ import { WalletConfigStore } from "./walletConfig";
 const PM2_APP = "polymarket-copybot";
 const APP_DIR = path.resolve(__dirname, "..");
 
+type AdminStep = { file: string; args: string[]; detached?: boolean };
+
 type AdminCmd = {
   label: string;
   file: string;
   args: string[];
+  // If true, spawn detached so the child survives this process being killed
+  // (needed for `pm2 reload/restart` of THIS app — pm2 sends SIGKILL to the
+  // whole process group, which would otherwise take out the pm2 CLI child too
+  // and surface as `[exit ?] Command failed` in Telegram).
+  detached?: boolean;
   // Optional follow-up commands executed sequentially (e.g. deploy chain).
-  then?: { file: string; args: string[] }[];
+  then?: AdminStep[];
   timeoutMs?: number;
 };
 
@@ -34,11 +41,13 @@ const ADMIN_COMMANDS: Record<string, AdminCmd> = {
     label: `pm2 reload ${PM2_APP}`,
     file: "pm2",
     args: ["reload", PM2_APP, "--update-env"],
+    detached: true,
   },
   restart: {
     label: `pm2 restart ${PM2_APP}`,
     file: "pm2",
     args: ["restart", PM2_APP, "--update-env"],
+    detached: true,
   },
   stopapp: {
     label: `pm2 stop ${PM2_APP}`,
@@ -69,7 +78,13 @@ const ADMIN_COMMANDS: Record<string, AdminCmd> = {
     args: ["pull", "--ff-only"],
     then: [
       { file: "npm", args: ["install", "--no-audit", "--no-fund"] },
-      { file: "pm2", args: ["reload", PM2_APP, "--update-env"] },
+      // Final step must be detached — pm2 reload will SIGKILL this very
+      // process, which would otherwise kill the pm2 CLI child too.
+      {
+        file: "pm2",
+        args: ["reload", PM2_APP, "--update-env"],
+        detached: true,
+      },
     ],
     timeoutMs: 180_000,
   },
@@ -107,12 +122,41 @@ function runOne(
   });
 }
 
+// Fire-and-forget: spawn the child in its own session so it isn't killed when
+// our process group gets a SIGKILL (e.g. `pm2 reload` of this very app).
+function runDetached(
+  file: string,
+  args: string[],
+): { ok: boolean; out: string } {
+  try {
+    const child = spawn(file, args, {
+      cwd: APP_DIR,
+      env: process.env,
+      detached: true,
+      stdio: "ignore",
+      shell: false,
+    });
+    child.unref();
+    return {
+      ok: true,
+      out: `(spawned detached, pid=${child.pid ?? "?"} — not waiting for output)`,
+    };
+  } catch (err: any) {
+    return { ok: false, out: `[spawn failed] ${err?.message ?? String(err)}` };
+  }
+}
+
 async function runAdminCmd(cmd: AdminCmd): Promise<string> {
   const timeoutMs = cmd.timeoutMs ?? 60_000;
-  const steps = [{ file: cmd.file, args: cmd.args }, ...(cmd.then ?? [])];
+  const steps: AdminStep[] = [
+    { file: cmd.file, args: cmd.args, detached: cmd.detached },
+    ...(cmd.then ?? []),
+  ];
   const chunks: string[] = [];
   for (const s of steps) {
-    const res = await runOne(s.file, s.args, timeoutMs);
+    const res = s.detached
+      ? runDetached(s.file, s.args)
+      : await runOne(s.file, s.args, timeoutMs);
     chunks.push(`$ ${s.file} ${s.args.join(" ")}\n${res.out}`);
     if (!res.ok) break; // stop the chain on first failure
   }
@@ -1092,6 +1136,19 @@ export class TelegramBot {
     await this.bot.telegram.sendMessage(chatId, "```\n" + truncated + "\n```", {
       parse_mode: "Markdown",
     } as any);
+    // If this command (or any of its steps) restarts the bot itself, let the
+    // user know — the next thing they'll see is the startup message from the
+    // freshly-spawned process.
+    const willRestart =
+      cmd.detached || (cmd.then ?? []).some((s) => s.detached);
+    if (willRestart) {
+      await this.bot.telegram
+        .sendMessage(
+          chatId,
+          "♻️ pm2 reload пуснат detached — ботът ще рестартира след малко.",
+        )
+        .catch(() => {});
+    }
   }
 
   // ─── Push notifications ───────────────────────────────────────────────────────
