@@ -9,13 +9,8 @@ const CLOB_API = "https://clob.polymarket.com";
 
 export async function getTradesForWallet(
   walletAddress: string,
-  _after?: number,
+  after?: number,
 ): Promise<Trade[]> {
-  // NOTE: data-api `/activity` endpoint silently ignores the `after` query
-  // parameter (verified by hand). We always pull the most recent N and rely
-  // on the watcher's `seen` set to filter duplicates. The arg is kept for
-  // backwards compatibility but no longer sent.
-  void _after;
   // Guard: skip obviously invalid addresses
   if (
     !walletAddress ||
@@ -31,6 +26,7 @@ export async function getTradesForWallet(
       user: walletAddress.toLowerCase(),
       limit: 100,
     };
+    if (after) params.after = after;
 
     const res = await axios.get(`${DATA_API}/activity`, {
       params,

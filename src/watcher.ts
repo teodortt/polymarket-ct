@@ -51,11 +51,6 @@ class WalletWatcher {
       if (t.timestamp > this.lastTs) this.lastTs = t.timestamp;
     }
     this.newCount += newTrades.length;
-    if (process.env.DEBUG_POLL === "1") {
-      console.log(
-        `[Watcher] poll ${this.wallet.slice(0, 10)}… returned=${trades.length} new=${newTrades.length} seen=${this.seen.size}`,
-      );
-    }
     return newTrades;
   }
 }
@@ -101,8 +96,6 @@ export class CopyTrader {
       walletCfgs: this.cfgStore, // pass reference directly — always defined
       getOrders: () => getOpenOrders(),
       getDebug: () => this.getDebug(),
-      peekTrades: (w, n) => this.peekTrades(w, n),
-      forceCopyLast: (w) => this.forceCopyLast(w),
     });
   }
 
