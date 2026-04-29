@@ -108,6 +108,74 @@ function isParseError(err: any): boolean {
   );
 }
 
+function isTooLongError(err: any): boolean {
+  if (!err) return false;
+  const code = err.code ?? err.response?.error_code;
+  const desc: string =
+    err.description || err.response?.description || err.message || "";
+  return code === 400 && /message is too long/i.test(desc);
+}
+
+// Telegram's hard limit is 4096 characters per message. Use a small safety
+// margin so we never round up into the error.
+const TG_MAX = 4000;
+// Per-page character budget for paginated lists. Leaves room for header,
+// footer, and inline keyboard rendering.
+const PAGE_BUDGET = 3500;
+
+// Group an array of pre-formatted item strings into pages where each page's
+// joined length stays within the char budget. Items longer than the budget
+// are placed alone on their own page (worst case, they'll still be split by
+// the safety net in sendChunk).
+function paginateItems(items: string[], budget = PAGE_BUDGET): string[][] {
+  const pages: string[][] = [];
+  let cur: string[] = [];
+  let curLen = 0;
+  for (const it of items) {
+    const len = it.length + 1; // +1 for joiner newline
+    if (cur.length > 0 && curLen + len > budget) {
+      pages.push(cur);
+      cur = [];
+      curLen = 0;
+    }
+    cur.push(it);
+    curLen += len;
+  }
+  if (cur.length > 0) pages.push(cur);
+  if (pages.length === 0) pages.push([]);
+  return pages;
+}
+
+// Split a long message into <= TG_MAX-char chunks, breaking on line
+// boundaries when possible so Markdown formatting (bold/italic/code blocks)
+// stays balanced within each chunk.
+function splitMessage(text: string, max = TG_MAX): string[] {
+  if (text.length <= max) return [text];
+  const out: string[] = [];
+  let buf = "";
+  for (const line of text.split("\n")) {
+    // Single line longer than max — hard-split it.
+    if (line.length > max) {
+      if (buf) {
+        out.push(buf);
+        buf = "";
+      }
+      for (let i = 0; i < line.length; i += max) {
+        out.push(line.slice(i, i + max));
+      }
+      continue;
+    }
+    if (buf.length + line.length + 1 > max) {
+      out.push(buf);
+      buf = line;
+    } else {
+      buf = buf ? buf + "\n" + line : line;
+    }
+  }
+  if (buf) out.push(buf);
+  return out;
+}
+
 function runOne(
   file: string,
   args: string[],
@@ -268,12 +336,29 @@ export class TelegramBot {
     const chatId = ctx.chat?.id;
     if (!chatId) return;
     const opts = { parse_mode: "Markdown" as const, ...(extra ?? {}) };
+    const chunks = splitMessage(text);
+    // Inline keyboards / reply markup belong only on the LAST chunk so the
+    // "refresh" / action buttons appear at the bottom of the conversation.
+    const lastIdx = chunks.length - 1;
+    for (let i = 0; i < chunks.length; i++) {
+      const isLast = i === lastIdx;
+      const chunkOpts: any = isLast
+        ? { ...opts }
+        : { parse_mode: opts.parse_mode };
+      await this.sendChunk(chatId, chunks[i], chunkOpts);
+    }
+  }
+
+  // Send a single (already-sized) chunk with Markdown → plain-text fallback.
+  private async sendChunk(
+    chatId: number,
+    text: string,
+    opts: { parse_mode?: "Markdown"; reply_markup?: any },
+  ) {
     try {
       await this.bot.telegram.sendMessage(chatId, text, opts as any);
     } catch (err: any) {
       if (isParseError(err)) {
-        // Strip Markdown and retry. Better to deliver an unstyled message
-        // than to throw and crash the handler.
         console.warn(
           `[Telegram] Markdown parse failed, retrying plain: ${err.description || err.message}`,
         );
@@ -281,15 +366,26 @@ export class TelegramBot {
         void parse_mode;
         try {
           await this.bot.telegram.sendMessage(chatId, text, rest);
+          return;
         } catch (err2: any) {
           console.error(
             "[Telegram] Plain-text fallback also failed:",
             err2.message,
           );
+          return;
         }
-      } else {
-        console.error("[Telegram] sendMessage failed:", err.message);
       }
+      if (isTooLongError(err)) {
+        // Defensive: shouldn't happen because we already split, but if it
+        // does (e.g. multibyte length differences), split harder and recurse.
+        console.warn(
+          `[Telegram] message too long after split, re-splitting smaller`,
+        );
+        const halves = splitMessage(text, Math.floor(TG_MAX / 2));
+        for (const h of halves) await this.sendChunk(chatId, h, opts);
+        return;
+      }
+      console.error("[Telegram] sendMessage failed:", err.message);
     }
   }
 
@@ -299,7 +395,10 @@ export class TelegramBot {
     const fullExtra = { parse_mode: "Markdown" as const, ...(extra ?? {}) };
     const isCallback =
       "callbackQuery" in ctx && (ctx as any).callbackQuery != null;
-    if (isCallback) {
+    // editMessageText can't span multiple messages — if the new content is
+    // too large to fit in one message, fall through to a fresh reply that
+    // gets properly chunked by replyTo().
+    if (isCallback && text.length <= TG_MAX) {
       try {
         await (ctx as any).editMessageText(text, fullExtra);
         return;
@@ -489,19 +588,21 @@ export class TelegramBot {
     });
 
     // P&L
-    b.command("pnl", (ctx) => this.handlePnl(ctx));
-    b.hears("📊 P&L", (ctx) => this.handlePnl(ctx));
+    b.command("pnl", (ctx) => this.handlePnl(ctx, 0));
+    b.hears("📊 P&L", (ctx) => this.handlePnl(ctx, 0));
 
     // Daily P&L per wallet
     b.command("daily", (ctx) => this.handleDaily(ctx, false));
     b.command("dailyall", (ctx) => this.handleDaily(ctx, true));
 
-    // History
+    // History — `/history` shows everything paginated; `/history N` limits
+    // to the most recent N items (still paginated if N is large).
     b.command("history", (ctx) => {
-      const n = parseInt(ctx.message.text.split(" ")[1] || "10");
-      this.handleHistory(ctx, n);
+      const arg = ctx.message.text.split(" ")[1];
+      const n = arg ? parseInt(arg) : undefined;
+      this.handleHistory(ctx, n, 0);
     });
-    b.hears("📜 History", (ctx) => this.handleHistory(ctx, 10));
+    b.hears("📜 History", (ctx) => this.handleHistory(ctx, undefined, 0));
 
     // Orders
     b.command("orders", (ctx) => this.handleOrders(ctx));
@@ -534,7 +635,7 @@ export class TelegramBot {
     b.action("refresh:pnl", (ctx) => {
       if (!this.allowed(ctx)) return;
       ctx.answerCbQuery().catch(() => {});
-      this.handlePnl(ctx);
+      this.handlePnl(ctx, 0);
     });
     b.action("refresh:status", (ctx) => {
       if (!this.allowed(ctx)) return;
@@ -549,7 +650,7 @@ export class TelegramBot {
     b.action("refresh:history", (ctx) => {
       if (!this.allowed(ctx)) return;
       ctx.answerCbQuery().catch(() => {});
-      this.handleHistory(ctx, 10);
+      this.handleHistory(ctx, undefined, 0);
     });
     b.action("refresh:daily", (ctx) => {
       if (!this.allowed(ctx)) return;
@@ -561,6 +662,19 @@ export class TelegramBot {
       ctx.answerCbQuery().catch(() => {});
       this.handleDebug(ctx);
     });
+
+    // Pagination callbacks: pg:<kind>:<pageIndex>
+    b.action(/^pg:(history|pnl):(\d+)$/, (ctx) => {
+      if (!this.allowed(ctx)) return;
+      ctx.answerCbQuery().catch(() => {});
+      const kind = ctx.match[1];
+      const page = parseInt(ctx.match[2], 10) || 0;
+      if (kind === "history") this.handleHistory(ctx, undefined, page);
+      else if (kind === "pnl") this.handlePnl(ctx, page);
+    });
+
+    // No-op for disabled pagination buttons (page indicator, edge arrows).
+    b.action("noop", (ctx) => ctx.answerCbQuery().catch(() => {}));
 
     // Debug — watcher state, useful when "nothing is happening"
     b.command("debug", (ctx) => this.handleDebug(ctx));
@@ -818,7 +932,7 @@ export class TelegramBot {
   }
 
   // ─── P&L ─────────────────────────────────────────────────────────────────────
-  private async handlePnl(ctx: Context) {
+  private async handlePnl(ctx: Context, page = 0) {
     if (!this.allowed(ctx)) return;
     const pnl = this.getPnL();
     await pnl.refreshPrices();
@@ -830,10 +944,10 @@ export class TelegramBot {
         this.refreshBtn("refresh:pnl"),
       );
 
-    let msg = `📊 *P&L Summary*\n\n`;
+    // Build per-position formatted blocks + running totals.
+    const items: string[] = [];
     let totalInvested = 0,
       totalPnlVal = 0;
-
     for (const pos of positions) {
       const pnlVal = pos.unrealizedPnl ?? 0;
       const pnlPct = pos.unrealizedPnlPct ?? 0;
@@ -842,16 +956,30 @@ export class TelegramBot {
       const wallets = pos.sourceWallets
         .map((w) => w.slice(0, 10) + "…")
         .join(", ");
-      msg += `*${q}*\n`;
-      msg += `  ${wallets}\n`;
-      msg += `  ${pos.side} avg $${pos.avgPrice.toFixed(4)} → $${(pos.currentPrice ?? 0).toFixed(4)}\n`;
-      msg += `  $${pos.totalSizeUsdc.toFixed(2)} | ${arrow} ${pnlVal >= 0 ? "+" : ""}$${pnlVal.toFixed(4)} (${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(1)}%)\n\n`;
+      items.push(
+        `*${q}*\n` +
+          `  ${wallets}\n` +
+          `  ${pos.side} avg $${pos.avgPrice.toFixed(4)} → $${(pos.currentPrice ?? 0).toFixed(4)}\n` +
+          `  $${pos.totalSizeUsdc.toFixed(2)} | ${arrow} ${pnlVal >= 0 ? "+" : ""}$${pnlVal.toFixed(4)} (${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(1)}%)`,
+      );
       totalInvested += pos.totalSizeUsdc;
       totalPnlVal += pnlVal;
     }
     const pct = totalInvested > 0 ? (totalPnlVal / totalInvested) * 100 : 0;
-    msg += `─────────────────\n*TOTAL*: $${totalInvested.toFixed(2)} | ${totalPnlVal >= 0 ? "▲ +" : "▼ "}$${Math.abs(totalPnlVal).toFixed(4)} (${totalPnlVal >= 0 ? "+" : ""}${pct.toFixed(1)}%)`;
-    this.editOrReply(ctx, msg, this.refreshBtn("refresh:pnl"));
+    const totalLine = `─────────────────\n*TOTAL*: $${totalInvested.toFixed(2)} | ${totalPnlVal >= 0 ? "▲ +" : "▼ "}$${Math.abs(totalPnlVal).toFixed(4)} (${totalPnlVal >= 0 ? "+" : ""}${pct.toFixed(1)}%)`;
+
+    const pages = paginateItems(items);
+    const safePage = Math.max(0, Math.min(page, pages.length - 1));
+    const header = `📊 *P&L Summary* — стр. ${safePage + 1}/${pages.length}\n\n`;
+    // TOTAL belongs only on the last page so totals aren't shown mid-list.
+    const footer = safePage === pages.length - 1 ? `\n\n${totalLine}` : "";
+    const body = pages[safePage].join("\n\n");
+    const msg = header + body + footer;
+    this.editOrReply(
+      ctx,
+      msg,
+      this.pageNav("pnl", safePage, pages.length, "refresh:pnl"),
+    );
   }
 
   // ─── Daily P&L per wallet ───────────────────────────────────────────────────
@@ -906,7 +1034,7 @@ export class TelegramBot {
   }
 
   // ─── History ──────────────────────────────────────────────────────────────────
-  private handleHistory(ctx: Context, n: number) {
+  private handleHistory(ctx: Context, n: number | undefined, page = 0) {
     if (!this.allowed(ctx)) return;
     const history = this.getHistory();
     if (history.length === 0)
@@ -921,18 +1049,60 @@ export class TelegramBot {
       SKIPPED: "⏭️",
       DRY_RUN: "🔵",
     };
-    const last = history.slice(-n).reverse();
-    let msg = `📜 *Последни ${last.length} trade(s):*\n\n`;
-    for (const t of last) {
+    // If n is supplied, take only the most recent n; otherwise show full
+    // history. Always reverse so newest is first.
+    const subset = n ? history.slice(-n) : history.slice();
+    subset.reverse();
+
+    const items: string[] = subset.map((t) => {
       const trade = t.originalTrade;
       const time = new Date(t.timestamp).toLocaleTimeString("bg-BG");
-      msg += `${icons[t.status] || "?"} *${t.status}* — ${time}\n`;
-      msg += `  ${trade.side} $${trade.size.toFixed(2)} @ ${trade.price}\n`;
-      if (t.orderId) msg += `  \`${t.orderId}\`\n`;
-      if (t.reason) msg += `  _${t.reason}_\n`;
-      msg += "\n";
+      let block = `${icons[t.status] || "?"} *${t.status}* — ${time}\n`;
+      block += `  ${trade.side} $${trade.size.toFixed(2)} @ ${trade.price}`;
+      if (t.orderId) block += `\n  \`${t.orderId}\``;
+      if (t.reason) block += `\n  _${t.reason}_`;
+      return block;
+    });
+
+    const pages = paginateItems(items);
+    const safePage = Math.max(0, Math.min(page, pages.length - 1));
+    const totalLabel = n
+      ? `последни ${subset.length}`
+      : `всички ${subset.length}`;
+    const header = `📜 *History (${totalLabel})* — стр. ${safePage + 1}/${pages.length}\n\n`;
+    const msg = header + pages[safePage].join("\n\n");
+    this.editOrReply(
+      ctx,
+      msg,
+      this.pageNav("history", safePage, pages.length, "refresh:history"),
+    );
+  }
+
+  // Build a pagination keyboard: ◀ Prev | N/M | Next ▶ | 🔄 Refresh
+  private pageNav(
+    kind: string,
+    page: number,
+    total: number,
+    refreshAction: string,
+  ) {
+    const row: any[] = [];
+    if (total > 1) {
+      row.push(
+        Markup.button.callback(
+          page > 0 ? "◀" : "·",
+          page > 0 ? `pg:${kind}:${page - 1}` : "noop",
+        ),
+      );
+      row.push(Markup.button.callback(`${page + 1}/${total}`, "noop"));
+      row.push(
+        Markup.button.callback(
+          page < total - 1 ? "▶" : "·",
+          page < total - 1 ? `pg:${kind}:${page + 1}` : "noop",
+        ),
+      );
     }
-    this.editOrReply(ctx, msg, this.refreshBtn("refresh:history"));
+    const refreshRow = [Markup.button.callback("🔄 Refresh", refreshAction)];
+    return Markup.inlineKeyboard(total > 1 ? [row, refreshRow] : [refreshRow]);
   }
 
   // ─── Orders ──────────────────────────────────────────────────────────────────
@@ -1170,26 +1340,11 @@ export class TelegramBot {
   }
 
   async send(text: string) {
-    try {
-      await this.bot.telegram.sendMessage(this.allowedChatId, text, {
+    const chunks = splitMessage(text);
+    for (const chunk of chunks) {
+      await this.sendChunk(Number(this.allowedChatId), chunk, {
         parse_mode: "Markdown",
       });
-    } catch (err: any) {
-      if (isParseError(err)) {
-        console.warn(
-          `[Telegram] send() Markdown parse failed, retrying plain: ${err.description || err.message}`,
-        );
-        try {
-          await this.bot.telegram.sendMessage(this.allowedChatId, text);
-        } catch (err2: any) {
-          console.error(
-            "[Telegram] send() plain-text fallback failed:",
-            err2.message,
-          );
-        }
-      } else {
-        console.error("[Telegram] Send failed:", err.message);
-      }
     }
   }
 
