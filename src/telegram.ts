@@ -6,6 +6,7 @@ import { config } from "./config";
 import { PnLTracker } from "./pnl";
 import { CopiedTrade, WalletConfig } from "./types";
 import { WalletConfigStore } from "./walletConfig";
+import { getLiveUsdcBalance } from "./trader";
 
 // ── Admin shell whitelist ────────────────────────────────────────────────────
 // Only these exact (file, args) tuples can ever be executed. No shell, no
@@ -1030,12 +1031,23 @@ export class TelegramBot {
     // Refresh forces a network round-trip.
     await pnl.refreshPrices(forceRefresh);
     const positions = pnl.getPositions();
-    if (positions.length === 0)
+    if (positions.length === 0) {
+      // Even with no positions show the balance so the user can see what
+      // they're starting from (dry-run) or what's on-chain (live).
+      let bLine = "";
+      if (config.dryRun) {
+        const b = pnl.getDryRunBalance(config.dryRunStartUsdc);
+        bLine = `\n\n💰 Cash: *$${b.cash.toFixed(2)}* / Start $${b.startCash.toFixed(2)}`;
+      } else {
+        const live = await getLiveUsdcBalance();
+        if (live) bLine = `\n\n💰 USDC: *$${live.balance.toFixed(2)}*`;
+      }
       return this.editOrReply(
         ctx,
-        "📊 No active positions.",
+        "📊 No active positions." + bLine,
         this.refreshBtn("refresh:pnl"),
       );
+    }
 
     // Build per-position formatted blocks + running totals.
     const items: string[] = [];
@@ -1059,7 +1071,18 @@ export class TelegramBot {
       totalPnlVal += pnlVal;
     }
     const pct = totalInvested > 0 ? (totalPnlVal / totalInvested) * 100 : 0;
-    const totalLine = `─────────────────\n*TOTAL*: $${totalInvested.toFixed(2)} | ${totalPnlVal >= 0 ? "▲ +" : "▼ "}$${Math.abs(totalPnlVal).toFixed(4)} (${totalPnlVal >= 0 ? "+" : ""}${pct.toFixed(1)}%)`;
+    // Balance line shown alongside totals on the last page only.
+    let balanceLine = "";
+    if (config.dryRun) {
+      const b = pnl.getDryRunBalance(config.dryRunStartUsdc);
+      const arrow = b.pnl >= 0 ? "▲" : "▼";
+      balanceLine = `\n💰 Equity: *$${b.equity.toFixed(2)}* (cash $${b.cash.toFixed(2)} + holdings $${b.holdingsValue.toFixed(2)}) ${arrow} ${b.pnl >= 0 ? "+" : ""}$${b.pnl.toFixed(2)}`;
+    } else {
+      const live = await getLiveUsdcBalance();
+      if (live)
+        balanceLine = `\n💰 USDC available: *$${live.balance.toFixed(2)}*`;
+    }
+    const totalLine = `─────────────────\n*TOTAL*: $${totalInvested.toFixed(2)} | ${totalPnlVal >= 0 ? "▲ +" : "▼ "}$${Math.abs(totalPnlVal).toFixed(4)} (${totalPnlVal >= 0 ? "+" : ""}${pct.toFixed(1)}%)${balanceLine}`;
 
     const pages = paginateItems(items);
     const safePage = Math.max(0, Math.min(page, pages.length - 1));
@@ -1240,7 +1263,7 @@ export class TelegramBot {
   }
 
   // ─── Status ───────────────────────────────────────────────────────────────────
-  private handleStatus(ctx: Context) {
+  private async handleStatus(ctx: Context) {
     if (!this.allowed(ctx)) return;
     const cfgs = this.walletCfgs.getAll();
     const history = this.getHistory();
@@ -1256,12 +1279,36 @@ export class TelegramBot {
             .join("\n")
         : "  (none)";
 
+    // Wallet-balance block — virtual in dry-run, on-chain USDC in live mode.
+    let balanceBlock = "";
+    if (config.dryRun) {
+      // Reuse cached prices so opening Status is instant.
+      await this.getPnL().refreshPrices();
+      const b = this.getPnL().getDryRunBalance(config.dryRunStartUsdc);
+      const arrow = b.pnl >= 0 ? "▲" : "▼";
+      balanceBlock =
+        `\n💰 *Virtual balance* (dry-run)\n` +
+        `  Start: $${b.startCash.toFixed(2)} | Cash: $${b.cash.toFixed(2)} | Holdings: $${b.holdingsValue.toFixed(2)}\n` +
+        `  Equity: *$${b.equity.toFixed(2)}* ${arrow} ${b.pnl >= 0 ? "+" : ""}$${b.pnl.toFixed(2)} (${b.pnl >= 0 ? "+" : ""}${b.pnlPct.toFixed(1)}%)\n`;
+    } else {
+      const live = await getLiveUsdcBalance();
+      if (live) {
+        balanceBlock =
+          `\n💰 *On-chain USDC*\n` +
+          `  \`${live.address.slice(0, 10)}…${live.address.slice(-4)}\`\n` +
+          `  Available: *$${live.balance.toFixed(2)}*\n`;
+      } else {
+        balanceBlock = `\n💰 *On-chain USDC*: _unavailable_\n`;
+      }
+    }
+
     this.editOrReply(
       ctx,
       `ℹ️ *Bot Status*\n\n` +
         `🟢 Running | Dry: ${config.dryRun ? "🔵 ON" : "🔴 OFF"}\n` +
-        `Poll: ${config.pollIntervalMs / 1000}s\n\n` +
-        `*Wallets (${cfgs.length}):*\n${wList}\n\n` +
+        `Poll: ${config.pollIntervalMs / 1000}s\n` +
+        balanceBlock +
+        `\n*Wallets (${cfgs.length}):*\n${wList}\n\n` +
         `✅ ${placed} | ❌ ${failed} | 📦 ${history.length}`,
       this.refreshBtn("refresh:status"),
     );

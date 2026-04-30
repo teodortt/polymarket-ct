@@ -1,5 +1,5 @@
 import { ClobClient, Side, OrderType } from "@polymarket/clob-client";
-import { createWalletClient, http } from "viem";
+import { createWalletClient, createPublicClient, http, erc20Abi } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
 import { config } from "./config";
@@ -7,6 +7,14 @@ import { Trade, CopiedTrade, MarketInfo } from "./types";
 import { getMarketInfo } from "./polymarketApi";
 
 let client: ClobClient | null = null;
+
+// Polymarket settles in USDC.e (bridged USDC) on Polygon.
+const USDC_E_POLYGON =
+  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174" as `0x${string}`;
+const publicClient = createPublicClient({
+  chain: polygon,
+  transport: http(),
+});
 
 export async function initTrader(): Promise<ClobClient> {
   if (client) return client;
@@ -159,5 +167,29 @@ export async function cancelOrdersByIds(
   } catch (err: any) {
     console.error("[Trader] cancelOrders failed:", err.message);
     return { ok: false, cancelled: 0, reason: err.message };
+  }
+}
+
+// Reads the on-chain USDC.e balance of the live trading wallet (the funder
+// address if set, otherwise the EOA derived from PRIVATE_KEY). Returns the
+// balance as a USDC float (6 decimals). Returns null on RPC failure so the
+// caller can render "n/a" instead of crashing.
+export async function getLiveUsdcBalance(): Promise<{
+  address: `0x${string}`;
+  balance: number;
+} | null> {
+  try {
+    const account = privateKeyToAccount(config.privateKey as `0x${string}`);
+    const address = (config.funderAddress || account.address) as `0x${string}`;
+    const raw = (await publicClient.readContract({
+      address: USDC_E_POLYGON,
+      abi: erc20Abi,
+      functionName: "balanceOf",
+      args: [address],
+    })) as bigint;
+    return { address, balance: Number(raw) / 1_000_000 };
+  } catch (err: any) {
+    console.error("[Trader] getLiveUsdcBalance failed:", err?.message ?? err);
+    return null;
   }
 }

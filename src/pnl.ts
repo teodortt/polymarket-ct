@@ -40,6 +40,10 @@ export class PnLTracker {
   // Cache prices for a few minutes — pagination and casual re-opens reuse
   // them instantly. Users can force a fresh fetch via the 🔄 Refresh button.
   private static readonly REFRESH_TTL_MS = 3 * 60_000;
+  // Net signed cashflow from simulated trades (BUY = -copySize, SELL = +copySize).
+  // Combined with a configurable starting balance this gives a "wallet balance"
+  // view in dry-run mode. Live trading reads on-chain USDC balance instead.
+  private dryRunCashFlow = 0;
 
   recordTrade(
     tokenId: string,
@@ -52,6 +56,11 @@ export class PnLTracker {
     walletLabel?: string,
   ) {
     const shares = price > 0 ? sizeUsdc / price : 0;
+
+    // Track simulated cash flow for dry-run "balance" view.
+    // BUY drains cash; SELL refunds proceeds. Real-trade balances come
+    // from on-chain USDC instead of this counter.
+    this.dryRunCashFlow += side === "BUY" ? -sizeUsdc : sizeUsdc;
 
     // ── position tracker ──────────────────────────────────────────────────────
     const existing = this.positions.get(tokenId);
@@ -248,5 +257,31 @@ export class PnLTracker {
   }
   getTotalPnl(): number {
     return this.getPositions().reduce((s, p) => s + (p.unrealizedPnl ?? 0), 0);
+  }
+
+  // ── Dry-run virtual balance ─────────────────────────────────────────────────
+  // cash       = startCash + net cashflow (BUY -, SELL +)
+  // holdings   = current market value of still-open long shares
+  // equity     = cash + holdings (what your wallet would be worth right now)
+  getDryRunBalance(startCash: number): {
+    startCash: number;
+    cash: number;
+    holdingsValue: number;
+    equity: number;
+    pnl: number;
+    pnlPct: number;
+  } {
+    const cash = startCash + this.dryRunCashFlow;
+    let holdingsValue = 0;
+    for (const pos of this.positions.values()) {
+      const openShares = Math.max(pos.totalShares, 0);
+      if (openShares > 0 && pos.currentPrice && pos.currentPrice > 0) {
+        holdingsValue += openShares * pos.currentPrice;
+      }
+    }
+    const equity = cash + holdingsValue;
+    const pnl = equity - startCash;
+    const pnlPct = startCash > 0 ? (pnl / startCash) * 100 : 0;
+    return { startCash, cash, holdingsValue, equity, pnl, pnlPct };
   }
 }

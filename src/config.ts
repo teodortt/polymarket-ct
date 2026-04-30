@@ -40,6 +40,9 @@ export const config = {
     | "GTC"
     | "FOK",
   dryRun: process.env.DRY_RUN !== "false",
+  // Virtual starting balance used in dry-run mode so the bot can show how
+  // much "money" you'd have left after the simulated trades.
+  dryRunStartUsdc: parseFloat(process.env.DRY_RUN_START_USDC || "1000"),
 
   // Optional SOCKS5/HTTP proxy (e.g. Cloudflare WARP: socks5://127.0.0.1:40000)
   proxyUrl: process.env.PROXY_URL || "",
