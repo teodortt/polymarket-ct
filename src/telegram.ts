@@ -689,7 +689,7 @@ export class TelegramBot {
     b.action("refresh:pnl", (ctx) => {
       if (!this.allowed(ctx)) return;
       ctx.answerCbQuery().catch(() => {});
-      this.handlePnl(ctx, 0);
+      this.handlePnl(ctx, 0, true);
     });
     b.action("refresh:status", (ctx) => {
       if (!this.allowed(ctx)) return;
@@ -709,7 +709,7 @@ export class TelegramBot {
     b.action("refresh:daily", (ctx) => {
       if (!this.allowed(ctx)) return;
       ctx.answerCbQuery().catch(() => {});
-      this.handleDaily(ctx, false);
+      this.handleDaily(ctx, false, true);
     });
     b.action("refresh:debug", (ctx) => {
       if (!this.allowed(ctx)) return;
@@ -1023,10 +1023,12 @@ export class TelegramBot {
   }
 
   // ─── P&L ─────────────────────────────────────────────────────────────────────
-  private async handlePnl(ctx: Context, page = 0) {
+  private async handlePnl(ctx: Context, page = 0, forceRefresh = false) {
     if (!this.allowed(ctx)) return;
     const pnl = this.getPnL();
-    await pnl.refreshPrices();
+    // Pagination reuses cached prices (instant); only initial open / explicit
+    // Refresh forces a network round-trip.
+    await pnl.refreshPrices(forceRefresh);
     const positions = pnl.getPositions();
     if (positions.length === 0)
       return this.editOrReply(
@@ -1074,10 +1076,14 @@ export class TelegramBot {
   }
 
   // ─── Daily P&L per wallet ───────────────────────────────────────────────────
-  private async handleDaily(ctx: Context, allDays: boolean) {
+  private async handleDaily(
+    ctx: Context,
+    allDays: boolean,
+    forceRefresh = false,
+  ) {
     if (!this.allowed(ctx)) return;
     const pnl = this.getPnL();
-    await pnl.refreshPrices();
+    await pnl.refreshPrices(forceRefresh);
     const records = pnl.getDailyByWallet(allDays);
 
     if (records.length === 0) {

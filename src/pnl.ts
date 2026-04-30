@@ -32,6 +32,14 @@ export class PnLTracker {
   private positions: Map<string, Position> = new Map();
   // key = "YYYY-MM-DD::wallet"
   private dailyRecords: Map<string, DailyRecord> = new Map();
+  // Short-lived cache so pagination / rapid refreshes don't re-fetch every
+  // single position price serially. The first call within the TTL window
+  // does the real network work; subsequent calls reuse the result.
+  private lastRefreshAt = 0;
+  private inFlightRefresh: Promise<void> | null = null;
+  // Cache prices for a few minutes — pagination and casual re-opens reuse
+  // them instantly. Users can force a fresh fetch via the 🔄 Refresh button.
+  private static readonly REFRESH_TTL_MS = 3 * 60_000;
 
   recordTrade(
     tokenId: string,
@@ -119,30 +127,53 @@ export class PnLTracker {
     }
   }
 
-  async refreshPrices(): Promise<void> {
-    // Refresh unrealized PnL per position
-    for (const pos of this.positions.values()) {
-      try {
-        const res = await axios.get(`${CLOB_API}/price`, {
-          params: { token_id: pos.tokenId, side: "BUY" },
-          timeout: 5000,
-        });
-        const currentPrice = parseFloat(res.data?.price ?? "0");
-        if (currentPrice > 0) {
-          pos.currentPrice = currentPrice;
-          // Unrealized P&L only on remaining long shares
-          const openShares = Math.max(pos.totalShares, 0);
-          pos.unrealizedPnl =
-            (currentPrice - pos.avgPrice) * openShares + pos.realizedPnl;
-          pos.unrealizedPnlPct =
-            pos.totalSizeUsdc > 0
-              ? (pos.unrealizedPnl / pos.totalSizeUsdc) * 100
-              : 0;
-        }
-      } catch {
-        /* skip */
-      }
+  async refreshPrices(force = false): Promise<void> {
+    // Serve from cache if still warm — keeps pagination instant.
+    if (
+      !force &&
+      this.lastRefreshAt &&
+      Date.now() - this.lastRefreshAt < PnLTracker.REFRESH_TTL_MS
+    ) {
+      return;
     }
+    // Coalesce concurrent callers onto the same in-flight request.
+    if (this.inFlightRefresh) return this.inFlightRefresh;
+    this.inFlightRefresh = this.doRefresh().finally(() => {
+      this.lastRefreshAt = Date.now();
+      this.inFlightRefresh = null;
+    });
+    return this.inFlightRefresh;
+  }
+
+  private async doRefresh(): Promise<void> {
+    // Fetch all position prices in parallel — previously this was a serial
+    // loop of 5s-timeout HTTP calls, so 6 positions could take ~30s worst
+    // case and made the P&L button / pagination feel frozen.
+    const positions = Array.from(this.positions.values());
+    await Promise.allSettled(
+      positions.map(async (pos) => {
+        try {
+          const res = await axios.get(`${CLOB_API}/price`, {
+            params: { token_id: pos.tokenId, side: "BUY" },
+            timeout: 3000,
+          });
+          const currentPrice = parseFloat(res.data?.price ?? "0");
+          if (currentPrice > 0) {
+            pos.currentPrice = currentPrice;
+            // Unrealized P&L only on remaining long shares
+            const openShares = Math.max(pos.totalShares, 0);
+            pos.unrealizedPnl =
+              (currentPrice - pos.avgPrice) * openShares + pos.realizedPnl;
+            pos.unrealizedPnlPct =
+              pos.totalSizeUsdc > 0
+                ? (pos.unrealizedPnl / pos.totalSizeUsdc) * 100
+                : 0;
+          }
+        } catch {
+          /* skip */
+        }
+      }),
+    );
 
     // Re-aggregate daily PnL per wallet from positions
     const today = new Date().toISOString().slice(0, 10);
