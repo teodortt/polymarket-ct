@@ -96,6 +96,7 @@ export class CopyTrader {
       walletCfgs: this.cfgStore, // pass reference directly — always defined
       getOrders: () => getOpenOrders(),
       getDebug: () => this.getDebug(),
+      clearHistory: () => this.clearHistory(),
     });
   }
 
@@ -139,6 +140,22 @@ export class CopyTrader {
     } catch (err: any) {
       console.error("[Watcher] Failed to save history:", err.message);
     }
+  }
+
+  /**
+   * Clears the in-memory copy history and per-day P&L records, then persists
+   * the empty history to disk. Followed wallets, wallet configs, and live
+   * positions (in-memory) are intentionally preserved.
+   */
+  clearHistory(): { clearedHistory: number; clearedDaily: number } {
+    const clearedHistory = this.history.length;
+    this.history = [];
+    this.saveHistory();
+    const clearedDaily = this.pnl.clearDailyRecords();
+    console.log(
+      `[Watcher] 🧹 Reset: cleared ${clearedHistory} history entries, ${clearedDaily} daily records.`,
+    );
+    return { clearedHistory, clearedDaily };
   }
 
   getDebug() {

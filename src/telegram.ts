@@ -123,12 +123,23 @@ const TG_MAX = 4000;
 // Per-page character budget for paginated lists. Leaves room for header,
 // footer, and inline keyboard rendering.
 const PAGE_BUDGET = 3500;
+// Hard cap on the number of pages produced for any paginated list. Keeps
+// /pnl and /history responsive even after thousands of trades; older entries
+// past the cap are dropped from the view (history.json on disk is bounded
+// separately).
+const MAX_PAGES = 100;
 
 // Group an array of pre-formatted item strings into pages where each page's
 // joined length stays within the char budget. Items longer than the budget
 // are placed alone on their own page (worst case, they'll still be split by
-// the safety net in sendChunk).
-function paginateItems(items: string[], budget = PAGE_BUDGET): string[][] {
+// the safety net in sendChunk). When the resulting page count exceeds
+// `maxPages`, only the first `maxPages` pages are kept and a truncation
+// notice is appended to the final page.
+function paginateItems(
+  items: string[],
+  budget = PAGE_BUDGET,
+  maxPages = MAX_PAGES,
+): string[][] {
   const pages: string[][] = [];
   let cur: string[] = [];
   let curLen = 0;
@@ -144,6 +155,17 @@ function paginateItems(items: string[], budget = PAGE_BUDGET): string[][] {
   }
   if (cur.length > 0) pages.push(cur);
   if (pages.length === 0) pages.push([]);
+  if (pages.length > maxPages) {
+    const kept = pages.slice(0, maxPages);
+    const droppedPages = pages.length - maxPages;
+    const droppedItems = pages
+      .slice(maxPages)
+      .reduce((s, p) => s + p.length, 0);
+    kept[kept.length - 1].push(
+      `_…(+${droppedItems} older item(s) across ${droppedPages} page(s) truncated)_`,
+    );
+    return kept;
+  }
   return pages;
 }
 
@@ -267,6 +289,7 @@ type GetPnLFn = () => PnLTracker;
 type SetDryRunFn = (val: boolean) => void;
 type GetOrdersFn = () => Promise<any[]>;
 type GetDebugFn = () => any;
+type ClearHistoryFn = () => { clearedHistory: number; clearedDaily: number };
 
 type Step = {
   type: "set_wallet_field";
@@ -288,6 +311,7 @@ export class TelegramBot {
   private setDryRun!: SetDryRunFn;
   private getOrders!: GetOrdersFn;
   private getDebug!: GetDebugFn;
+  private clearHistory!: ClearHistoryFn;
   private walletCfgs!: WalletConfigStore;
 
   constructor() {
@@ -314,6 +338,7 @@ export class TelegramBot {
     setDryRun: SetDryRunFn;
     getOrders: GetOrdersFn;
     getDebug: GetDebugFn;
+    clearHistory: ClearHistoryFn;
     walletCfgs: WalletConfigStore;
   }) {
     Object.assign(this, callbacks);
@@ -733,6 +758,27 @@ export class TelegramBot {
 
     // Debug — watcher state, useful when "nothing is happening"
     b.command("debug", (ctx) => this.handleDebug(ctx));
+
+    // ── Reset history (keeps wallets + live positions) ──────────────────────
+    b.command("reset", (ctx) => this.handleResetPrompt(ctx));
+    b.action("reset:confirm", async (ctx) => {
+      if (!this.allowed(ctx)) return;
+      ctx.answerCbQuery("Clearing…").catch(() => {});
+      const res = this.clearHistory();
+      this.editOrReply(
+        ctx,
+        `🧹 *Reset complete.*\n\n` +
+          `• History entries cleared: *${res.clearedHistory}*\n` +
+          `• Daily P&L records cleared: *${res.clearedDaily}*\n\n` +
+          `_Wallets and live positions were kept. ` +
+          `Positions in memory remain until the next restart._`,
+      );
+    });
+    b.action("reset:abort", (ctx) => {
+      if (!this.allowed(ctx)) return;
+      ctx.answerCbQuery("Cancelled").catch(() => {});
+      this.editOrReply(ctx, "↩️ Reset cancelled.");
+    });
 
     // ── Admin shell commands (whitelisted) ───────────────────────────────────
     for (const key of Object.keys(ADMIN_COMMANDS)) {
@@ -1378,6 +1424,29 @@ export class TelegramBot {
     this.editOrReply(ctx, msg, this.refreshBtn("refresh:debug"));
   }
 
+  // ─── Reset prompt ─────────────────────────────────────────────────────────
+  private handleResetPrompt(ctx: Context) {
+    if (!this.allowed(ctx)) return;
+    const historyCount = this.getHistory().length;
+    const dailyCount = this.getPnL().getDailyByWallet(true).length;
+    const positions = this.getPnL().getPositions().length;
+    const wallets = this.walletCfgs.getAll().length;
+    const text =
+      `🧹 *Reset bot data?*\n\n` +
+      `This will clear:\n` +
+      `• Copy history: *${historyCount}* entr(ies)\n` +
+      `• Daily P&L records: *${dailyCount}*\n\n` +
+      `Kept untouched:\n` +
+      `• Followed wallets: *${wallets}* (use /remove to delete)\n` +
+      `• Live positions: *${positions}* (in-memory; gone on next restart)\n\n` +
+      `_Already-placed live orders on Polymarket are NOT affected._`;
+    const buttons = [
+      [Markup.button.callback("✅ Yes, clear history", "reset:confirm")],
+      [Markup.button.callback("↩️ Cancel", "reset:abort")],
+    ];
+    this.replyTo(ctx, text, Markup.inlineKeyboard(buttons));
+  }
+
   // ─── Help ─────────────────────────────────────────────────────────────────────
   private handleHelp(ctx: Context) {
     if (!this.allowed(ctx)) return;
@@ -1395,6 +1464,7 @@ export class TelegramBot {
         `/pnl | /history [n] | /status\n` +
         `/orders — active orders\n` +
         `/debug — watcher diagnostics\n` +
+        `/reset — clear history (keeps wallets+positions)\n` +
         `/dryrun on|off | /settings\n\n` +
         `*Admin (server):*\n` +
         `/admin — button menu\n` +

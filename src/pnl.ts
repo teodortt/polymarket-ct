@@ -259,6 +259,14 @@ export class PnLTracker {
     return this.getPositions().reduce((s, p) => s + (p.unrealizedPnl ?? 0), 0);
   }
 
+  // Clear all per-day per-wallet records. Positions and dryRunCashFlow are
+  // intentionally preserved so a "history reset" doesn't wipe live exposure.
+  clearDailyRecords(): number {
+    const n = this.dailyRecords.size;
+    this.dailyRecords.clear();
+    return n;
+  }
+
   // ── Dry-run virtual balance ─────────────────────────────────────────────────
   // cash       = startCash + net cashflow (BUY -, SELL +)
   // holdings   = current market value of still-open long shares
