@@ -1050,10 +1050,12 @@ export class TelegramBot {
     }
 
     // Build per-position formatted blocks + running totals.
+    // Newest positions first so the freshest activity shows on page 1.
+    const orderedPositions = [...positions].reverse();
     const items: string[] = [];
     let totalInvested = 0,
       totalPnlVal = 0;
-    for (const pos of positions) {
+    for (const pos of orderedPositions) {
       const pnlVal = pos.unrealizedPnl ?? 0;
       const pnlPct = pos.unrealizedPnlPct ?? 0;
       const arrow = pnlVal >= 0 ? "▲" : "▼";
@@ -1087,8 +1089,9 @@ export class TelegramBot {
     const pages = paginateItems(items);
     const safePage = Math.max(0, Math.min(page, pages.length - 1));
     const header = `📊 *P&L Summary* — page ${safePage + 1}/${pages.length}\n\n`;
-    // TOTAL belongs only on the last page so totals aren't shown mid-list.
-    const footer = safePage === pages.length - 1 ? `\n\n${totalLine}` : "";
+    // TOTAL belongs only on the first page so the headline number is the
+    // first thing the user sees; subsequent pages are just position details.
+    const footer = safePage === 0 ? `\n\n${totalLine}` : "";
     const body = pages[safePage].join("\n\n");
     const msg = header + body + footer;
     this.editOrReply(
