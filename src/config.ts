@@ -7,6 +7,20 @@ function required(key: string): string {
   return val;
 }
 
+function normalizePrivateKey(key: string): `0x${string}` {
+  const trimmed = key.trim();
+  const hex =
+    trimmed.startsWith("0x") || trimmed.startsWith("0X")
+      ? trimmed.slice(2)
+      : trimmed;
+  if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
+    throw new Error(
+      `Invalid PRIVATE_KEY: expected 64 hex chars (with or without 0x prefix), got length ${hex.length}`,
+    );
+  }
+  return `0x${hex.toLowerCase()}` as `0x${string}`;
+}
+
 function parseTargetWallets(): string[] {
   const raw = process.env.TARGET_WALLETS;
   if (!raw) return []; // allowed — can be added later via Telegram
@@ -20,7 +34,7 @@ export const config = {
   host: "https://clob.polymarket.com",
   chainId: 137,
 
-  privateKey: required("PRIVATE_KEY"),
+  privateKey: normalizePrivateKey(required("PRIVATE_KEY")),
   funderAddress: process.env.FUNDER_ADDRESS || "",
   signatureType: parseInt(process.env.SIGNATURE_TYPE || "0") as 0 | 1 | 2,
 
