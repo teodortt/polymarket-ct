@@ -289,7 +289,11 @@ type GetPnLFn = () => PnLTracker;
 type SetDryRunFn = (val: boolean) => void;
 type GetOrdersFn = () => Promise<any[]>;
 type GetDebugFn = () => any;
-type ClearHistoryFn = () => { clearedHistory: number; clearedDaily: number };
+type ClearHistoryFn = () => {
+  clearedHistory: number;
+  clearedDaily: number;
+  clearedPositions: number;
+};
 
 type Step = {
   type: "set_wallet_field";
@@ -1435,11 +1439,14 @@ export class TelegramBot {
       `🧹 *Reset bot data?*\n\n` +
       `This will clear:\n` +
       `• Copy history: *${historyCount}* entr(ies)\n` +
-      `• Daily P&L records: *${dailyCount}*\n\n` +
+      `• Daily P&L records: *${dailyCount}*\n` +
+      `• Tracked positions: *${positions}*\n` +
+      `• Equity / totals / dry-run cashflow → reset to start\n\n` +
       `Kept untouched:\n` +
       `• Followed wallets: *${wallets}* (use /remove to delete)\n` +
-      `• Live positions: *${positions}* (in-memory; gone on next restart)\n\n` +
-      `_Already-placed live orders on Polymarket are NOT affected._`;
+      `• On-chain orders & balances on Polymarket (live mode)\n\n` +
+      `_Works in both dry-run and live mode — only the bot's internal_\n` +
+      `_view is cleared._`;
     const buttons = [
       [Markup.button.callback("✅ Yes, clear history", "reset:confirm")],
       [Markup.button.callback("↩️ Cancel", "reset:abort")],
@@ -1564,6 +1571,51 @@ export class TelegramBot {
   }
 
   async launch() {
+    // Belt-and-suspenders: if a webhook was ever set on this bot token (manually
+    // or by a previous deploy), getUpdates polling silently returns nothing and
+    // the bot looks "alive" (outgoing notifications work) but never reacts to
+    // /menu, /status, etc. Force-clear it before launching the polling loop.
+    try {
+      await this.bot.telegram.deleteWebhook({ drop_pending_updates: true });
+    } catch (err: any) {
+      console.warn(
+        `[Telegram] deleteWebhook failed (continuing): ${err?.message ?? err}`,
+      );
+    }
+
+    // Register the slash-command list shown in Telegram's native "Menu" /
+    // command-suggestion popup (the blue button next to the input field).
+    // Without this the user has to remember every command verbatim.
+    try {
+      await this.bot.telegram.setMyCommands([
+        { command: "menu", description: "Main menu" },
+        { command: "wallets", description: "List & configure wallets" },
+        { command: "add", description: "Add wallet: /add 0x... [Label]" },
+        { command: "remove", description: "Remove wallet: /remove 0x..." },
+        { command: "pnl", description: "P&L summary" },
+        { command: "daily", description: "Today's P&L per wallet" },
+        { command: "dailyall", description: "All-days P&L per wallet" },
+        { command: "history", description: "Copy history" },
+        { command: "orders", description: "Active orders" },
+        { command: "status", description: "Bot status" },
+        { command: "settings", description: "Global settings" },
+        { command: "debug", description: "Watcher diagnostics" },
+        { command: "dryrun", description: "Toggle dry-run: /dryrun on|off" },
+        { command: "reset", description: "Reset history & P&L data" },
+        { command: "admin", description: "Admin shell menu" },
+        { command: "help", description: "Show help" },
+      ]);
+      // Make the left-of-input button open the commands menu (instead of the
+      // default "web app" button), so tapping it reveals the list above.
+      await this.bot.telegram.setChatMenuButton({
+        menuButton: { type: "commands" },
+      });
+    } catch (err: any) {
+      console.warn(
+        `[Telegram] setMyCommands/setChatMenuButton failed: ${err?.message ?? err}`,
+      );
+    }
+
     // dropPendingUpdates: discard everything queued on Telegram's servers
     // while the bot was offline. Without this, restarting the bot replays
     // every /reload, /restart, etc. that piled up — causing "ghost" command

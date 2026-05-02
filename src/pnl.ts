@@ -267,6 +267,25 @@ export class PnLTracker {
     return n;
   }
 
+  // Full wipe — positions, daily records, simulated cashflow. Used by /reset
+  // so equity/total counters start from zero again (in dry-run, equity falls
+  // back to startCash; in live mode the on-chain balance is unaffected, but
+  // the bot's internal P&L/positions view is cleared).
+  resetAll(): {
+    clearedPositions: number;
+    clearedDaily: number;
+    clearedCashFlow: number;
+  } {
+    const clearedPositions = this.positions.size;
+    const clearedDaily = this.dailyRecords.size;
+    const clearedCashFlow = this.dryRunCashFlow;
+    this.positions.clear();
+    this.dailyRecords.clear();
+    this.dryRunCashFlow = 0;
+    this.lastRefreshAt = 0;
+    return { clearedPositions, clearedDaily, clearedCashFlow };
+  }
+
   // ── Dry-run virtual balance ─────────────────────────────────────────────────
   // cash       = startCash + net cashflow (BUY -, SELL +)
   // holdings   = current market value of still-open long shares

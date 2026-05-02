@@ -143,19 +143,34 @@ export class CopyTrader {
   }
 
   /**
-   * Clears the in-memory copy history and per-day P&L records, then persists
-   * the empty history to disk. Followed wallets, wallet configs, and live
-   * positions (in-memory) are intentionally preserved.
+   * Clears the in-memory copy history, per-day P&L records, tracked positions
+   * and the dry-run cashflow counter, then persists the empty history to disk.
+   * Followed wallets and wallet configs are intentionally preserved.
+   *
+   * After this runs, /pnl, /daily, equity and total counters all start from
+   * zero again — both in dry-run (equity returns to the configured start
+   * balance) and in live mode (on-chain USDC is untouched, but the bot's
+   * internal positions view is cleared).
    */
-  clearHistory(): { clearedHistory: number; clearedDaily: number } {
+  clearHistory(): {
+    clearedHistory: number;
+    clearedDaily: number;
+    clearedPositions: number;
+  } {
     const clearedHistory = this.history.length;
     this.history = [];
     this.saveHistory();
-    const clearedDaily = this.pnl.clearDailyRecords();
+    const reset = this.pnl.resetAll();
     console.log(
-      `[Watcher] 🧹 Reset: cleared ${clearedHistory} history entries, ${clearedDaily} daily records.`,
+      `[Watcher] 🧹 Reset: cleared ${clearedHistory} history entries, ` +
+        `${reset.clearedDaily} daily records, ${reset.clearedPositions} positions ` +
+        `(cashflow $${reset.clearedCashFlow.toFixed(2)} → 0).`,
     );
-    return { clearedHistory, clearedDaily };
+    return {
+      clearedHistory,
+      clearedDaily: reset.clearedDaily,
+      clearedPositions: reset.clearedPositions,
+    };
   }
 
   getDebug() {
