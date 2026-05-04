@@ -26,6 +26,11 @@ export async function initTrader(): Promise<ClobClient> {
     transport: http(),
   });
 
+  // NOTE: useServerTime=true (8th positional arg) is critical on devices with
+  // unreliable clocks (e.g. Termux on Android). Without it, L1 EIP-712
+  // signatures are timestamped with the local clock — if it drifts more than
+  // a few seconds the CLOB rejects createApiKey/deriveApiKey, and we end up
+  // with empty creds that later crash HMAC signing on every order.
   const tempClient = new ClobClient(
     config.host,
     config.chainId,
@@ -33,9 +38,39 @@ export async function initTrader(): Promise<ClobClient> {
     undefined,
     config.signatureType,
     config.funderAddress || account.address,
+    undefined, // geoBlockToken
+    true, // useServerTime
   );
 
-  const apiCreds = await tempClient.createOrDeriveApiKey();
+  // createOrDeriveApiKey() does NOT throw on HTTP error — it returns
+  // { key: undefined, secret: undefined, passphrase: undefined } when the
+  // underlying CLOB requests fail (e.g. clock skew, geo-block, signature
+  // rejection). Without this guard the bot silently sends every order with
+  // an undefined HMAC secret, which then crashes deep inside clob-client
+  // with a useless "Cannot read properties of undefined (reading 'replace')"
+  // error. Try create first, and if that yields no usable creds, explicitly
+  // try derive (covers the "key already exists" case differently).
+  let apiCreds: any = await tempClient.createOrDeriveApiKey();
+  if (!apiCreds?.key || !apiCreds?.secret || !apiCreds?.passphrase) {
+    try {
+      apiCreds = await (tempClient as any).deriveApiKey();
+    } catch (err: any) {
+      throw new Error(
+        `Failed to obtain CLOB API credentials (derive threw): ${err?.message ?? err}`,
+      );
+    }
+  }
+  if (!apiCreds?.key || !apiCreds?.secret || !apiCreds?.passphrase) {
+    throw new Error(
+      `Failed to obtain CLOB API credentials. Got: ${JSON.stringify({
+        key: apiCreds?.key ? "<set>" : apiCreds?.key,
+        secret: apiCreds?.secret ? "<set>" : apiCreds?.secret,
+        passphrase: apiCreds?.passphrase ? "<set>" : apiCreds?.passphrase,
+        error: (apiCreds as any)?.error,
+        status: (apiCreds as any)?.status,
+      })}. Common causes: wrong PRIVATE_KEY, clock skew (set USE_SERVER_TIME=true), or geo-block.`,
+    );
+  }
 
   client = new ClobClient(
     config.host,
@@ -44,9 +79,13 @@ export async function initTrader(): Promise<ClobClient> {
     apiCreds,
     config.signatureType,
     config.funderAddress || account.address,
+    undefined, // geoBlockToken
+    true, // useServerTime — see note above
   );
 
-  console.log(`[Trader] Initialized. Wallet: ${account.address}`);
+  console.log(
+    `[Trader] Initialized. Wallet: ${account.address} apiKey=${String(apiCreds.key).slice(0, 8)}…`,
+  );
   return client;
 }
 
