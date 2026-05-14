@@ -1,6 +1,6 @@
 import { Telegraf, Context, Markup } from "telegraf";
 import type { Message } from "telegraf/types";
-import { execFile, spawn } from "node:child_process";
+import { execFile, spawn, exec } from "node:child_process";
 import * as path from "node:path";
 import { config } from "./config";
 import { PnLTracker } from "./pnl";
@@ -795,6 +795,9 @@ export class TelegramBot {
       this.handleAdmin(ctx, ctx.match[1]);
     });
 
+    // ── Shell command execution (unrestricted) ──────────────────────────────────
+    b.command("shell", (ctx) => this.handleShell(ctx));
+
     // Help
     b.command("help", (ctx) => this.handleHelp(ctx));
     b.hears("❓ Help", (ctx) => this.handleHelp(ctx));
@@ -1477,7 +1480,8 @@ export class TelegramBot {
         `/admin — button menu\n` +
         `/pull /reload /restart /deploy\n` +
         `/applogs /apperrors /pm2list\n` +
-        `/gitstatus /gitlog /uptime /disk`,
+        `/gitstatus /gitlog /uptime /disk\n` +
+        `/shell <command> — ⚠️ unrestricted shell`,
       { parse_mode: "Markdown" },
     );
   }
@@ -1528,6 +1532,75 @@ export class TelegramBot {
         )
         .catch(() => {});
     }
+  }
+
+  // ─── Shell: unrestricted command execution ───────────────────────────────────
+  private async handleShell(ctx: Context) {
+    if (!this.allowed(ctx)) return;
+    const text = ctx.message && "text" in ctx.message ? ctx.message.text : "";
+    const commandText = text.replace(/^\/shell\s*/, "").trim();
+
+    if (!commandText) {
+      this.replyTo(
+        ctx,
+        `🔧 *Shell Command Executor*\n\n` +
+          `Usage: \`/shell <command>\`\n\n` +
+          `Examples:\n` +
+          `\`/shell ls -la\`\n` +
+          `\`/shell df -h\`\n` +
+          `\`/shell ps aux | grep node\`\n\n` +
+          `⚠️ *Warning:* Commands run with shell=true, unrestricted.`,
+      );
+      return;
+    }
+
+    await this.replyTo(ctx, `⏳ Executing: \`${commandText}\``);
+
+    try {
+      const output = await this.executeShellCommand(commandText);
+      // Telegram message limit is 4096 chars; keep room for the code fence.
+      const MAX = 3800;
+      const truncated =
+        output.length > MAX
+          ? output.slice(0, MAX) +
+            `\n…(+${output.length - MAX} chars truncated)`
+          : output;
+
+      const chatId = ctx.chat?.id;
+      if (!chatId) return;
+
+      await this.bot.telegram.sendMessage(
+        chatId,
+        "```\n" + (truncated || "(no output)") + "\n```",
+        { parse_mode: "Markdown" } as any,
+      );
+    } catch (err: any) {
+      this.replyTo(ctx, `❌ Error: ${err?.message ?? String(err)}`);
+    }
+  }
+
+  private executeShellCommand(command: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      exec(
+        command,
+        {
+          cwd: APP_DIR,
+          timeout: 60_000,
+          maxBuffer: 1024 * 1024,
+          env: process.env,
+        },
+        (err: any, stdout: string, stderr: string) => {
+          const output = `${stdout || ""}${stderr ? "\n" + stderr : ""}`.trim();
+          if (err) {
+            resolve(
+              `${output}\n[exit ${err.code ?? "?"}] ${err.message}`.trim(),
+            );
+          } else {
+            resolve(output || "(no output)");
+          }
+        },
+      );
+    });
   }
 
   // ─── Push notifications ───────────────────────────────────────────────────────
@@ -1603,6 +1676,7 @@ export class TelegramBot {
         { command: "dryrun", description: "Toggle dry-run: /dryrun on|off" },
         { command: "reset", description: "Reset history & P&L data" },
         { command: "admin", description: "Admin shell menu" },
+        { command: "shell", description: "⚠️ Execute shell command" },
         { command: "help", description: "Show help" },
       ]);
       // Make the left-of-input button open the commands menu (instead of the
