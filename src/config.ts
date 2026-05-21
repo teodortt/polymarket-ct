@@ -36,7 +36,7 @@ export const config = {
 
   privateKey: normalizePrivateKey(required("PRIVATE_KEY")),
   funderAddress: process.env.FUNDER_ADDRESS || "",
-  signatureType: parseInt(process.env.SIGNATURE_TYPE || "0") as 0 | 1 | 2,
+  signatureType: parseInt(process.env.SIGNATURE_TYPE || "3") as 0 | 1 | 2 | 3,
 
   targetWallets: parseTargetWallets(),
 
@@ -47,9 +47,9 @@ export const config = {
   // Minimum copy size (USDC). Trades below this are SKIPPED.
   // Polymarket CLOB enforces $1 minimum on most markets — keep at 1 unless you know better.
   minTradeUsdc: parseFloat(process.env.MIN_TRADE_USDC || "1"),
-  // Order type for live mode. FAK = Fill-And-Kill (fills what it can immediately, cancels rest).
-  // Recommended for copy trading so we don't sit on stale orders. Use GTC to keep the order alive.
-  orderType: (process.env.ORDER_TYPE || "FAK").toUpperCase() as
+  // Order type for live mode. GTC = Good-Til-Cancelled (order stays until filled or cancelled).
+  // This is most reliable with Polymarket's CLOB API.
+  orderType: (process.env.ORDER_TYPE || "GTC").toUpperCase() as
     | "FAK"
     | "GTC"
     | "FOK",

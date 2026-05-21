@@ -1,4 +1,4 @@
-import { ClobClient, Side, OrderType } from "@polymarket/clob-client";
+import { ClobClient, Side, OrderType, Chain } from "@polymarket/clob-client-v2";
 import { createWalletClient, createPublicClient, http, erc20Abi } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
@@ -7,6 +7,12 @@ import { Trade, CopiedTrade, MarketInfo } from "./types";
 import { getMarketInfo } from "./polymarketApi";
 
 let client: ClobClient | null = null;
+let activeAuthKey = "";
+
+type AuthMode = {
+  signatureType: 0 | 1 | 2 | 3;
+  funder: string;
+};
 
 // Polymarket settles in USDC.e (bridged USDC) on Polygon.
 const USDC_E_POLYGON =
@@ -16,38 +22,189 @@ const publicClient = createPublicClient({
   transport: http(),
 });
 
-export async function initTrader(): Promise<ClobClient> {
-  if (client) return client;
+function makeAuthKey(mode: AuthMode): string {
+  return `${mode.signatureType}:${mode.funder.toLowerCase()}`;
+}
 
+function getDefaultAuthMode(): AuthMode {
+  const account = privateKeyToAccount(config.privateKey as `0x${string}`);
+  const funder = config.funderAddress || account.address;
+  // New Polymarket API users with a dedicated funder/deposit wallet should use signature type 3.
+  const likelyDepositWallet =
+    config.funderAddress &&
+    config.funderAddress.toLowerCase() !== account.address.toLowerCase();
+
+  return {
+    signatureType: likelyDepositWallet
+      ? 3
+      : (config.signatureType as 0 | 1 | 2 | 3),
+    funder,
+  };
+}
+
+function getFallbackAuthModes(): AuthMode[] {
+  const account = privateKeyToAccount(config.privateKey as `0x${string}`);
+  const addr = account.address;
+  const envFunder = config.funderAddress || "";
+  const candidates: AuthMode[] = [
+    getDefaultAuthMode(),
+    { signatureType: 3, funder: envFunder || addr },
+    { signatureType: 0, funder: envFunder || addr },
+    { signatureType: 1, funder: envFunder || addr },
+    { signatureType: 2, funder: envFunder || addr },
+    { signatureType: 0, funder: addr },
+    { signatureType: 1, funder: addr },
+  ];
+
+  const seen = new Set<string>();
+  return candidates.filter((m) => {
+    const k = makeAuthKey(m);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+async function createClient(mode: AuthMode): Promise<ClobClient> {
   const account = privateKeyToAccount(config.privateKey as `0x${string}`);
   const signer = createWalletClient({
     account,
     chain: polygon,
-    transport: http(),
+    transport: http(process.env.RPC_URL || "https://polygon-rpc.com"),
   });
 
-  const tempClient = new ClobClient(
-    config.host,
-    config.chainId,
+  const tempClient = new ClobClient({
+    host: config.host,
+    chain: Chain.POLYGON,
     signer,
-    undefined,
-    config.signatureType,
-    config.funderAddress || account.address,
-  );
+    signatureType: mode.signatureType,
+    funderAddress: mode.funder,
+  });
 
   const apiCreds = await tempClient.createOrDeriveApiKey();
 
-  client = new ClobClient(
-    config.host,
-    config.chainId,
+  return new ClobClient({
+    host: config.host,
+    chain: Chain.POLYGON,
     signer,
-    apiCreds,
-    config.signatureType,
-    config.funderAddress || account.address,
-  );
+    creds: apiCreds,
+    signatureType: mode.signatureType,
+    funderAddress: mode.funder,
+  });
+}
 
-  console.log(`[Trader] Initialized. Wallet: ${account.address}`);
+export async function initTrader(): Promise<ClobClient> {
+  if (client) return client;
+
+  const mode = getDefaultAuthMode();
+  client = await createClient(mode);
+  activeAuthKey = makeAuthKey(mode);
+  console.log(
+    `[Trader] Initialized. signatureType=${mode.signatureType} funder=${mode.funder}`,
+  );
   return client;
+}
+
+function isOrderVersionMismatch(reason: unknown): boolean {
+  const text = String(reason ?? "").toLowerCase();
+  return text.includes("order_version_mismatch");
+}
+
+function isAuthRetryable(reason: unknown): boolean {
+  const text = String(reason ?? "").toLowerCase();
+  return (
+    text.includes("order_version_mismatch") ||
+    text.includes("maker address not allowed") ||
+    text.includes("deposit wallet flow")
+  );
+}
+
+function parseMinSize(reason: unknown): number | null {
+  const m = String(reason ?? "").match(/minimum:\s*([0-9]*\.?[0-9]+)/i);
+  return m ? Number(m[1]) : null;
+}
+
+function adjustPriceToTick(price: number, tickSize: string): number {
+  const tick = Number(tickSize || 0.01);
+  if (!Number.isFinite(tick) || tick <= 0) return price;
+  const rounded = Math.round(price / tick) * tick;
+  const clipped = Math.max(tick, Math.min(1 - tick, rounded));
+  const decimals = String(tickSize).includes(".")
+    ? String(tickSize).split(".")[1].length
+    : 2;
+  return Number(clipped.toFixed(Math.max(decimals, 2)));
+}
+
+async function tryPlaceOrderWithClient(
+  c: ClobClient,
+  trade: Trade,
+  copySize: number,
+  marketInfo: MarketInfo,
+) {
+  const tickSize = marketInfo.tickSize as "0.1" | "0.01" | "0.001" | "0.0001";
+  const orderOpts = { tickSize, negRisk: marketInfo.negRisk };
+  const side = trade.side === "BUY" ? Side.BUY : Side.SELL;
+  const adjustedPrice = adjustPriceToTick(trade.price, tickSize);
+  const size =
+    adjustedPrice > 0
+      ? (side === Side.BUY ? copySize + 0.02 : copySize) / adjustedPrice
+      : 0;
+
+  return c.createAndPostOrder(
+    {
+      tokenID: trade.tokenId,
+      price: adjustedPrice,
+      size,
+      side,
+    },
+    orderOpts,
+    OrderType.GTC,
+  );
+}
+
+async function retryOrderWithFallbackAuth(
+  trade: Trade,
+  copySize: number,
+  marketInfo: MarketInfo,
+) {
+  const modes = getFallbackAuthModes();
+  const modeByKey = new Map(modes.map((m) => [makeAuthKey(m), m]));
+  const ordered = [
+    ...modes.filter((m) => makeAuthKey(m) !== activeAuthKey),
+    ...modes.filter((m) => makeAuthKey(m) === activeAuthKey),
+  ];
+
+  for (const mode of ordered) {
+    const key = makeAuthKey(mode);
+    try {
+      const c = await createClient(mode);
+      const response = await tryPlaceOrderWithClient(
+        c,
+        trade,
+        copySize,
+        marketInfo,
+      );
+      if (response?.success) {
+        client = c;
+        activeAuthKey = key;
+        console.log(
+          `[Trader] Switched auth mode: signatureType=${mode.signatureType} funder=${mode.funder}`,
+        );
+        return response;
+      }
+
+      const reason = response?.errorMsg || JSON.stringify(response);
+      if (!isAuthRetryable(reason)) return response;
+    } catch {
+      console.log(
+        `[Trader] Auth mode failed: signatureType=${mode.signatureType} funder=${mode.funder}`,
+      );
+      const known = modeByKey.get(key);
+      if (!known) continue;
+    }
+  }
+
+  return null;
 }
 
 export async function copyTradeWithSize(
@@ -83,49 +240,40 @@ export async function copyTradeWithSize(
 
   try {
     const c = await initTrader();
-    const tickSize = marketInfo.tickSize as "0.1" | "0.01" | "0.001" | "0.0001";
-    const orderOpts = { tickSize, negRisk: marketInfo.negRisk };
-    const side = trade.side === "BUY" ? Side.BUY : Side.SELL;
+    let response = await tryPlaceOrderWithClient(
+      c,
+      trade,
+      copySize,
+      marketInfo,
+    );
 
-    let response: any;
-    if (config.orderType === "FAK" || config.orderType === "FOK") {
-      // Marketable order — must use createAndPostMarketOrder.
-      // For BUY: amount = USDC. For SELL: amount = shares.
-      const amount =
-        side === Side.BUY
-          ? copySize
-          : trade.price > 0
-            ? copySize / trade.price
-            : 0;
-      response = await c.createAndPostMarketOrder(
-        {
-          tokenID: trade.tokenId,
-          price: trade.price,
-          amount,
-          side,
-        },
-        orderOpts,
-        config.orderType === "FAK" ? OrderType.FAK : OrderType.FOK,
+    // If server says min order is higher, retry once with that minimum.
+    if (!response?.success) {
+      const minSize = parseMinSize(response?.errorMsg || response);
+      if (minSize && copySize < minSize) {
+        response = await tryPlaceOrderWithClient(c, trade, minSize, marketInfo);
+      }
+    }
+
+    if (!response?.success && isAuthRetryable(response?.errorMsg || response)) {
+      const fallback = await retryOrderWithFallbackAuth(
+        trade,
+        copySize,
+        marketInfo,
       );
-    } else {
-      response = await c.createAndPostOrder(
-        {
-          tokenID: trade.tokenId,
-          price: trade.price,
-          size: copySize,
-          side,
-        },
-        orderOpts,
-        OrderType.GTC,
-      );
+      if (fallback) response = fallback;
     }
 
     // throwOnError defaults to false in ClobClient — must check success manually
     if (!response?.success) {
-      const reason =
+      let reason =
         response?.errorMsg ||
         JSON.stringify(response) ||
         "Order rejected by CLOB";
+      if (isOrderVersionMismatch(reason)) {
+        reason +=
+          " | auth mismatch: for new Polymarket API users use SIGNATURE_TYPE=3 with FUNDER_ADDRESS=deposit/profile address.";
+      }
       console.error(`[Trader] ❌ Order rejected: ${reason}`);
       result.status = "FAILED";
       result.reason = reason;
