@@ -1,4 +1,10 @@
-import { ClobClient, Side, OrderType, Chain } from "@polymarket/clob-client-v2";
+import {
+  ClobClient,
+  Side,
+  OrderType,
+  Chain,
+  AssetType,
+} from "@polymarket/clob-client-v2";
 import { createWalletClient, createPublicClient, http, erc20Abi } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
@@ -120,6 +126,11 @@ function isAuthRetryable(reason: unknown): boolean {
   );
 }
 
+function isInsufficientBalance(reason: unknown): boolean {
+  const text = String(reason ?? "").toLowerCase();
+  return text.includes("not enough balance") || text.includes("allowance");
+}
+
 function parseMinSize(reason: unknown): number | null {
   const m = String(reason ?? "").match(/minimum:\s*([0-9]*\.?[0-9]+)/i);
   return m ? Number(m[1]) : null;
@@ -147,6 +158,22 @@ async function tryPlaceOrderWithClient(
     orderOpts,
     OrderType.GTC,
   );
+}
+
+async function getAvailableCollateralUsdc(
+  c: ClobClient,
+): Promise<number | null> {
+  try {
+    const ba = await c.getBalanceAllowance({
+      asset_type: AssetType.COLLATERAL,
+    });
+    const raw = Number(ba?.balance ?? "0");
+    if (!Number.isFinite(raw) || raw < 0) return null;
+    // Polymarket collateral balances are returned in 6-decimal USDC units.
+    return raw / 1_000_000;
+  } catch {
+    return null;
+  }
 }
 
 async function retryOrderWithFallbackAuth(
@@ -227,25 +254,63 @@ export async function copyTradeWithSize(
 
   try {
     const c = await initTrader();
+    let effectiveCopySize = copySize;
+
+    // Preflight BUY sizing by available collateral to avoid avoidable rejects.
+    if (trade.side === "BUY") {
+      const available = await getAvailableCollateralUsdc(c);
+      if (available !== null) {
+        // Keep headroom for fees/slippage so we don't consume 100% balance.
+        const buffered = Math.max(0, available * 0.97 - 0.02);
+        effectiveCopySize = Math.min(copySize, buffered);
+        if (effectiveCopySize < config.minTradeUsdc) {
+          result.status = "SKIPPED";
+          result.reason =
+            `Insufficient collateral: available $${available.toFixed(2)} ` +
+            `(< min trade $${config.minTradeUsdc.toFixed(2)})`;
+          return result;
+        }
+      }
+    }
+
     let response = await tryPlaceOrderWithClient(
       c,
       trade,
-      copySize,
+      effectiveCopySize,
       marketInfo,
     );
 
     // If server says min order is higher, retry once with that minimum.
     if (!response?.success) {
       const minSize = parseMinSize(response?.errorMsg || response);
-      if (minSize && copySize < minSize) {
+      if (minSize && effectiveCopySize < minSize) {
         response = await tryPlaceOrderWithClient(c, trade, minSize, marketInfo);
+      }
+      // If BUY still hits balance/allowance, downsize once and retry.
+      if (
+        !response?.success &&
+        trade.side === "BUY" &&
+        isInsufficientBalance(response?.errorMsg || response)
+      ) {
+        const available = await getAvailableCollateralUsdc(c);
+        if (available !== null) {
+          const retrySize = Math.max(0, available * 0.94 - 0.02);
+          if (retrySize >= config.minTradeUsdc) {
+            response = await tryPlaceOrderWithClient(
+              c,
+              trade,
+              retrySize,
+              marketInfo,
+            );
+          }
+        }
       }
     }
 
     if (!response?.success && isAuthRetryable(response?.errorMsg || response)) {
       const fallback = await retryOrderWithFallbackAuth(
         trade,
-        copySize,
+        effectiveCopySize,
         marketInfo,
       );
       if (fallback) response = fallback;
@@ -260,6 +325,11 @@ export async function copyTradeWithSize(
       if (isOrderVersionMismatch(reason)) {
         reason +=
           " | auth mismatch: for new Polymarket API users use SIGNATURE_TYPE=3 with FUNDER_ADDRESS=deposit/profile address.";
+      }
+      if (isInsufficientBalance(reason)) {
+        result.status = "SKIPPED";
+        result.reason = reason;
+        return result;
       }
       console.error(`[Trader] ❌ Order rejected: ${reason}`);
       result.status = "FAILED";
