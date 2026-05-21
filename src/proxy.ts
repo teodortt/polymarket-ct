@@ -47,7 +47,3 @@ export async function verifyProxy(): Promise<void> {
     );
   }
 }
-
-export function getProxyAgent(): HttpAgent | undefined {
-  return agent ?? undefined;
-}

@@ -12,6 +12,10 @@ export interface Position {
   avgPrice: number;
   realizedPnl: number; // P&L locked-in by SELLs
   currentPrice?: number;
+  // Total P&L = realized + mark-to-market on open shares.
+  totalPnl?: number;
+  totalPnlPct?: number;
+  // Backward-compatible aliases kept for existing callers.
   unrealizedPnl?: number;
   unrealizedPnlPct?: number;
   trades: number;
@@ -169,14 +173,17 @@ export class PnLTracker {
           const currentPrice = parseFloat(res.data?.price ?? "0");
           if (currentPrice > 0) {
             pos.currentPrice = currentPrice;
-            // Unrealized P&L only on remaining long shares
+            // Total P&L = realized + mark-to-market on remaining long shares.
             const openShares = Math.max(pos.totalShares, 0);
-            pos.unrealizedPnl =
+            pos.totalPnl =
               (currentPrice - pos.avgPrice) * openShares + pos.realizedPnl;
-            pos.unrealizedPnlPct =
+            pos.totalPnlPct =
               pos.totalSizeUsdc > 0
-                ? (pos.unrealizedPnl / pos.totalSizeUsdc) * 100
+                ? (pos.totalPnl / pos.totalSizeUsdc) * 100
                 : 0;
+            // Compatibility for existing renderers.
+            pos.unrealizedPnl = pos.totalPnl;
+            pos.unrealizedPnlPct = pos.totalPnlPct;
           }
         } catch {
           /* skip */
@@ -191,8 +198,11 @@ export class PnLTracker {
       const walletKey = rec.wallet.toLowerCase();
       let walletPnl = 0;
       for (const pos of this.positions.values()) {
-        if (pos.sourceWallets.map((w) => w.toLowerCase()).includes(walletKey)) {
-          walletPnl += pos.unrealizedPnl ?? 0;
+        const sourceSet = new Set(
+          pos.sourceWallets.map((w) => w.toLowerCase()),
+        );
+        if (sourceSet.has(walletKey)) {
+          walletPnl += pos.totalPnl ?? pos.unrealizedPnl ?? 0;
         }
       }
       rec.pnl = walletPnl;
@@ -221,8 +231,8 @@ export class PnLTracker {
     let totalInvested = 0,
       totalPnl = 0;
     for (const pos of this.positions.values()) {
-      const pnl = pos.unrealizedPnl ?? 0;
-      const pnlPct = pos.unrealizedPnlPct ?? 0;
+      const pnl = pos.totalPnl ?? pos.unrealizedPnl ?? 0;
+      const pnlPct = pos.totalPnlPct ?? pos.unrealizedPnlPct ?? 0;
       const arrow = pnl >= 0 ? "▲" : "▼";
       const q = (pos.question || pos.tokenId).slice(0, 44);
       const wallets = pos.sourceWallets
@@ -256,7 +266,10 @@ export class PnLTracker {
     return Array.from(this.positions.values());
   }
   getTotalPnl(): number {
-    return this.getPositions().reduce((s, p) => s + (p.unrealizedPnl ?? 0), 0);
+    return this.getPositions().reduce(
+      (s, p) => s + (p.totalPnl ?? p.unrealizedPnl ?? 0),
+      0,
+    );
   }
 
   // Clear all per-day per-wallet records. Positions and dryRunCashFlow are

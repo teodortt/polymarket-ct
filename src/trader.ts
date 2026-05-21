@@ -5,6 +5,7 @@ import { polygon } from "viem/chains";
 import { config } from "./config";
 import { Trade, CopiedTrade, MarketInfo } from "./types";
 import { getMarketInfo } from "./polymarketApi";
+import { adjustPriceToTick, toLimitOrderSizeShares } from "./orderSizing";
 
 let client: ClobClient | null = null;
 let activeAuthKey = "";
@@ -124,17 +125,6 @@ function parseMinSize(reason: unknown): number | null {
   return m ? Number(m[1]) : null;
 }
 
-function adjustPriceToTick(price: number, tickSize: string): number {
-  const tick = Number(tickSize || 0.01);
-  if (!Number.isFinite(tick) || tick <= 0) return price;
-  const rounded = Math.round(price / tick) * tick;
-  const clipped = Math.max(tick, Math.min(1 - tick, rounded));
-  const decimals = String(tickSize).includes(".")
-    ? String(tickSize).split(".")[1].length
-    : 2;
-  return Number(clipped.toFixed(Math.max(decimals, 2)));
-}
-
 async function tryPlaceOrderWithClient(
   c: ClobClient,
   trade: Trade,
@@ -145,10 +135,7 @@ async function tryPlaceOrderWithClient(
   const orderOpts = { tickSize, negRisk: marketInfo.negRisk };
   const side = trade.side === "BUY" ? Side.BUY : Side.SELL;
   const adjustedPrice = adjustPriceToTick(trade.price, tickSize);
-  const size =
-    adjustedPrice > 0
-      ? (side === Side.BUY ? copySize + 0.02 : copySize) / adjustedPrice
-      : 0;
+  const size = toLimitOrderSizeShares(trade.side, copySize, adjustedPrice);
 
   return c.createAndPostOrder(
     {

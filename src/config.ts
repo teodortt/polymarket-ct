@@ -32,8 +32,6 @@ function parseTargetWallets(): string[] {
 
 export const config = {
   host: "https://clob.polymarket.com",
-  chainId: 137,
-
   privateKey: normalizePrivateKey(required("PRIVATE_KEY")),
   funderAddress: process.env.FUNDER_ADDRESS || "",
   signatureType: parseInt(process.env.SIGNATURE_TYPE || "3") as 0 | 1 | 2 | 3,

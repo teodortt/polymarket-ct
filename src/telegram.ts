@@ -843,9 +843,8 @@ export class TelegramBot {
   }
 
   // Aggregate PnL across all positions sourced (even partly) from this wallet.
-  // Note: position.unrealizedPnl already includes realizedPnl, so it represents
-  // total P&L on that position. When prices haven't been refreshed yet, fall
-  // back to realizedPnl alone.
+  // totalPnl is preferred; when prices haven't been refreshed yet, fall back
+  // to legacy unrealizedPnl and then realizedPnl.
   private walletPnlSummary(wallet: string): {
     totalPnl: number;
     invested: number;
@@ -858,11 +857,11 @@ export class TelegramBot {
     let positions = 0;
     let openPositions = 0;
     for (const pos of this.getPnL().getPositions()) {
-      if (!pos.sourceWallets.map((w) => w.toLowerCase()).includes(key))
-        continue;
+      const sourceSet = new Set(pos.sourceWallets.map((w) => w.toLowerCase()));
+      if (!sourceSet.has(key)) continue;
       positions++;
       if (pos.totalShares > 0) openPositions++;
-      totalPnl += pos.unrealizedPnl ?? pos.realizedPnl;
+      totalPnl += pos.totalPnl ?? pos.unrealizedPnl ?? pos.realizedPnl;
       invested += pos.totalSizeUsdc;
     }
     return { totalPnl, invested, positions, openPositions };
@@ -1109,8 +1108,8 @@ export class TelegramBot {
     let totalInvested = 0,
       totalPnlVal = 0;
     for (const pos of orderedPositions) {
-      const pnlVal = pos.unrealizedPnl ?? 0;
-      const pnlPct = pos.unrealizedPnlPct ?? 0;
+      const pnlVal = pos.totalPnl ?? pos.unrealizedPnl ?? 0;
+      const pnlPct = pos.totalPnlPct ?? pos.unrealizedPnlPct ?? 0;
       const arrow = pnlVal >= 0 ? "▲" : "▼";
       const q = (pos.question || pos.tokenId).slice(0, 40);
       const wallets = pos.sourceWallets
