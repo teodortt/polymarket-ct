@@ -37,22 +37,21 @@ async function main() {
   // Give Telegram a moment to connect before polling starts
   await new Promise((r) => setTimeout(r, 1500));
 
-  // 4. Optional weather prediction + auto-trading engine (independent loop)
-  let weather: WeatherEngine | null = null;
-  if (config.weather.enabled) {
-    weather = new WeatherEngine(tg);
-    tg.setWeatherReportProvider(() => weather!.getReport());
-    weather
-      .start()
-      .catch((err: Error) =>
-        console.error("[Weather] engine error:", err.message),
-      );
-  }
+  // 4. Weather prediction + auto-trading engine (independent loop).
+  // It stays alive in standby when disabled, so Telegram can enable it later
+  // without requiring a process restart.
+  const weather = new WeatherEngine(tg);
+  tg.setWeatherReportProvider(() => weather.getReport());
+  weather
+    .start()
+    .catch((err: Error) =>
+      console.error("[Weather] engine error:", err.message),
+    );
 
   process.on("SIGINT", async () => {
     console.log("\n\n[Main] Shutting down...");
     bot.stop();
-    weather?.stop();
+    weather.stop();
     await tg.send("🛑 CopyBot stopped.");
     tg.stop();
     const history = bot.getHistory();

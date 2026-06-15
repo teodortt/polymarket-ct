@@ -47,24 +47,30 @@ export class WeatherEngine {
 
   // ── lifecycle ───────────────────────────────────────────────────────────────
   async start() {
-    if (!this.cfg.enabled) {
-      console.log("[Weather] Module disabled (WEATHER_ENABLED!=true).");
+    if (this.running) {
+      console.log("[Weather] start() ignored — already running.");
       return;
     }
     this.running = true;
-    console.log(
-      `🌦  [Weather] started | every ${Math.round(this.cfg.scanIntervalMs / 60000)}m | ` +
-        `lookahead ${this.cfg.lookaheadDays}d | minEdge ${(this.cfg.minEdge * 100).toFixed(0)}% | ` +
-        `dry ${config.dryRun}`,
-    );
-    await this.notifier?.send(
-      `🌦 *Weather engine started*\nScan every ${Math.round(this.cfg.scanIntervalMs / 60000)}m • ` +
-        `min edge ${(this.cfg.minEdge * 100).toFixed(0)}% • Dry: ${config.dryRun ? "🔵 ON" : "🔴 OFF"}`,
-    );
+    if (this.cfg.enabled) {
+      console.log(
+        `🌦  [Weather] started | every ${Math.round(this.cfg.scanIntervalMs / 60000)}m | ` +
+          `lookahead ${this.cfg.lookaheadDays}d | minEdge ${(this.cfg.minEdge * 100).toFixed(0)}% | ` +
+          `dry ${config.dryRun}`,
+      );
+      await this.notifier?.send(
+        `🌦 *Weather engine started*\nScan every ${Math.round(this.cfg.scanIntervalMs / 60000)}m • ` +
+          `min edge ${(this.cfg.minEdge * 100).toFixed(0)}% • Dry: ${config.dryRun ? "🔵 ON" : "🔴 OFF"}`,
+      );
+    } else {
+      console.log(
+        "[Weather] started in standby (disabled). Use Telegram to enable.",
+      );
+    }
 
     while (this.running) {
       try {
-        await this.scanOnce();
+        if (this.cfg.enabled) await this.scanOnce();
       } catch (err: any) {
         console.error("[Weather] scan error:", err?.message ?? err);
       }

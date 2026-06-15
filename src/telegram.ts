@@ -4,7 +4,7 @@ import { execFile, spawn, exec } from "node:child_process";
 import * as path from "node:path";
 import { config } from "./config";
 import { PnLTracker } from "./pnl";
-import { CopiedTrade, WalletConfig } from "./types";
+import { CopiedTrade, WalletConfig, WeatherConfig } from "./types";
 import { WalletConfigStore } from "./walletConfig";
 import { getLiveUsdcBalance } from "./trader";
 
@@ -197,6 +197,17 @@ function splitMessage(text: string, max = TG_MAX): string[] {
   }
   if (buf) out.push(buf);
   return out;
+}
+
+function parseBool(val: string): boolean | undefined {
+  const v = val.trim().toLowerCase();
+  if (["1", "true", "on", "yes", "y", "enable", "enabled"].includes(v)) {
+    return true;
+  }
+  if (["0", "false", "off", "no", "n", "disable", "disabled"].includes(v)) {
+    return false;
+  }
+  return undefined;
 }
 
 function runOne(
@@ -708,7 +719,45 @@ export class TelegramBot {
     b.hears("ℹ️ Status", (ctx) => this.handleStatus(ctx));
 
     // Weather predictions + signals
-    b.command("weather", (ctx) => this.handleWeather(ctx));
+    b.command("weather", (ctx) => {
+      if (!this.allowed(ctx)) return;
+      const arg = ctx.message.text.split(" ")[1]?.trim();
+      if (arg) {
+        const enabled = parseBool(arg);
+        if (enabled !== undefined) {
+          config.weather.enabled = enabled;
+          this.replyTo(
+            ctx,
+            `✅ WEATHER_ENABLED set to *${enabled}*\n\nUse /weathercfg to inspect current runtime values.`,
+          );
+          return;
+        }
+      }
+      this.handleWeather(ctx);
+    });
+    b.command("weathercfg", (ctx) => {
+      if (!this.allowed(ctx)) return;
+      const parts = ctx.message.text.trim().split(/\s+/);
+      if (parts.length === 1) {
+        this.replyTo(ctx, this.weatherConfigSummary());
+        return;
+      }
+      if (parts.length < 3) {
+        this.replyTo(
+          ctx,
+          "Usage:\n/weathercfg\n/weathercfg WEATHER_ENABLED true\n/weathercfg WEATHER_MIN_PRICE 0.03",
+        );
+        return;
+      }
+      const key = parts[1];
+      const value = parts.slice(2).join(" ");
+      const res = this.applyWeatherConfig(key, value);
+      if (!res.ok) {
+        this.replyTo(ctx, `❌ ${res.msg}`);
+        return;
+      }
+      this.replyTo(ctx, `✅ ${res.msg}`);
+    });
     b.hears("🌦 Weather", (ctx) => this.handleWeather(ctx));
     b.action("refresh:weather", (ctx) => {
       if (!this.allowed(ctx)) return;
@@ -1395,11 +1444,12 @@ export class TelegramBot {
     ctx.reply(
       `⚙️ *Global Settings*\n\n` +
         `Dry run: ${config.dryRun ? "🔵 ON" : "🔴 OFF"}\n` +
+        `Weather: ${config.weather.enabled ? "🟢 ON" : "⏸ OFF"}\n` +
         `Order type: \`${config.orderType}\`\n` +
         `Poll: \`${config.pollIntervalMs / 1000}s\`\n` +
         `Min trade: \`$${config.minTradeUsdc}\`\n\n` +
         `Per-wallet: /wallets → pick wallet\n\n` +
-        `/dryrun on|off | /debug`,
+        `/dryrun on|off | /weather on|off | /weathercfg | /debug`,
       { parse_mode: "Markdown" },
     );
   }
@@ -1483,8 +1533,7 @@ export class TelegramBot {
       return this.editOrReply(
         ctx,
         "🌦 *Weather module disabled.*\n\n" +
-          "Set `WEATHER_ENABLED=true` to enable forecast-based predictions " +
-          "and auto-trading of temperature markets.",
+          "Enable it with `/weather on` or set `WEATHER_ENABLED=true` in env.",
       );
     }
     try {
@@ -1492,6 +1541,177 @@ export class TelegramBot {
       this.editOrReply(ctx, text, this.refreshBtn("refresh:weather"));
     } catch (err: any) {
       this.editOrReply(ctx, `❌ Weather report failed: ${err?.message ?? err}`);
+    }
+  }
+
+  private weatherConfigSummary(): string {
+    const w = config.weather;
+    return (
+      `🌦 *Weather config*\n\n` +
+      `WEATHER_ENABLED=\`${w.enabled}\`\n` +
+      `WEATHER_MIN_PRICE=\`${w.minPrice}\`\n` +
+      `WEATHER_MAX_PRICE=\`${w.maxPrice}\`\n` +
+      `WEATHER_MIN_LIQUIDITY_USDC=\`${w.minLiquidityUsdc}\`\n` +
+      `WEATHER_MAX_LIQUIDITY_FRACTION=\`${w.maxLiquidityFraction}\`\n` +
+      `WEATHER_SPREAD_INFLATION=\`${w.spreadInflation}\`\n` +
+      `WEATHER_KDE_BANDWIDTH_F=\`${w.kdeBandwidthF}\`\n` +
+      `WEATHER_KDE_LEAD_PER_DAY_F=\`${w.kdeLeadPerDayF}\`\n` +
+      `WEATHER_SCAN_INTERVAL_MS=\`${w.scanIntervalMs}\`\n` +
+      `WEATHER_MAX_TRADES_PER_SCAN=\`${w.maxTradesPerScan}\`\n` +
+      `WEATHER_MAX_TRADES_PER_DAY=\`${w.maxTradesPerDay}\`\n` +
+      `WEATHER_MODELS=\`${w.models}\`\n\n` +
+      `_Runtime only: values are not persisted to .env automatically._\n` +
+      `Usage:\n` +
+      `/weather on|off\n` +
+      `/weathercfg WEATHER_MIN_PRICE 0.03`
+    );
+  }
+
+  private applyWeatherConfig(
+    keyRaw: string,
+    valueRaw: string,
+  ): { ok: boolean; msg: string } {
+    const key = keyRaw.trim().toUpperCase();
+    const normalized = key.startsWith("WEATHER_") ? key.slice(8) : key;
+    const w: WeatherConfig = config.weather;
+
+    const parseNum = (): number | null => {
+      const n = Number(valueRaw);
+      return Number.isFinite(n) ? n : null;
+    };
+    const parseIntNum = (): number | null => {
+      const n = Number(valueRaw);
+      return Number.isInteger(n) ? n : null;
+    };
+
+    switch (normalized) {
+      case "ENABLED": {
+        const b = parseBool(valueRaw);
+        if (b === undefined) {
+          return {
+            ok: false,
+            msg: "Invalid boolean. Use true/false or on/off.",
+          };
+        }
+        w.enabled = b;
+        return { ok: true, msg: `WEATHER_ENABLED=${b}` };
+      }
+      case "MIN_PRICE": {
+        const n = parseNum();
+        if (n == null || n < 0 || n > 1) {
+          return {
+            ok: false,
+            msg: "WEATHER_MIN_PRICE must be between 0 and 1.",
+          };
+        }
+        w.minPrice = n;
+        return { ok: true, msg: `WEATHER_MIN_PRICE=${n}` };
+      }
+      case "MAX_PRICE": {
+        const n = parseNum();
+        if (n == null || n < 0 || n > 1) {
+          return {
+            ok: false,
+            msg: "WEATHER_MAX_PRICE must be between 0 and 1.",
+          };
+        }
+        w.maxPrice = n;
+        return { ok: true, msg: `WEATHER_MAX_PRICE=${n}` };
+      }
+      case "MIN_LIQUIDITY_USDC": {
+        const n = parseNum();
+        if (n == null || n < 0) {
+          return { ok: false, msg: "WEATHER_MIN_LIQUIDITY_USDC must be >= 0." };
+        }
+        w.minLiquidityUsdc = n;
+        return { ok: true, msg: `WEATHER_MIN_LIQUIDITY_USDC=${n}` };
+      }
+      case "MAX_LIQUIDITY_FRACTION":
+      case "MAX_LIQ_FRACTION": {
+        const n = parseNum();
+        if (n == null || n < 0 || n > 1) {
+          return {
+            ok: false,
+            msg: "WEATHER_MAX_LIQUIDITY_FRACTION must be between 0 and 1.",
+          };
+        }
+        w.maxLiquidityFraction = n;
+        return { ok: true, msg: `WEATHER_MAX_LIQUIDITY_FRACTION=${n}` };
+      }
+      case "SPREAD_INFLATION": {
+        const n = parseNum();
+        if (n == null || n < 1) {
+          return { ok: false, msg: "WEATHER_SPREAD_INFLATION must be >= 1." };
+        }
+        w.spreadInflation = n;
+        return { ok: true, msg: `WEATHER_SPREAD_INFLATION=${n}` };
+      }
+      case "KDE_BANDWIDTH_F": {
+        const n = parseNum();
+        if (n == null || n < 0) {
+          return { ok: false, msg: "WEATHER_KDE_BANDWIDTH_F must be >= 0." };
+        }
+        w.kdeBandwidthF = n;
+        return { ok: true, msg: `WEATHER_KDE_BANDWIDTH_F=${n}` };
+      }
+      case "KDE_LEAD_PER_DAY_F": {
+        const n = parseNum();
+        if (n == null || n < 0) {
+          return { ok: false, msg: "WEATHER_KDE_LEAD_PER_DAY_F must be >= 0." };
+        }
+        w.kdeLeadPerDayF = n;
+        return { ok: true, msg: `WEATHER_KDE_LEAD_PER_DAY_F=${n}` };
+      }
+      case "SCAN_INTERVAL_MS": {
+        const n = parseIntNum();
+        if (n == null || n < 1000) {
+          return {
+            ok: false,
+            msg: "WEATHER_SCAN_INTERVAL_MS must be an integer >= 1000.",
+          };
+        }
+        w.scanIntervalMs = n;
+        return { ok: true, msg: `WEATHER_SCAN_INTERVAL_MS=${n}` };
+      }
+      case "MAX_TRADES_PER_SCAN": {
+        const n = parseIntNum();
+        if (n == null || n < 0) {
+          return {
+            ok: false,
+            msg: "WEATHER_MAX_TRADES_PER_SCAN must be an integer >= 0.",
+          };
+        }
+        w.maxTradesPerScan = n;
+        return { ok: true, msg: `WEATHER_MAX_TRADES_PER_SCAN=${n}` };
+      }
+      case "MAX_TRADES_PER_DAY": {
+        const n = parseIntNum();
+        if (n == null || n < 0) {
+          return {
+            ok: false,
+            msg: "WEATHER_MAX_TRADES_PER_DAY must be an integer >= 0.",
+          };
+        }
+        w.maxTradesPerDay = n;
+        return { ok: true, msg: `WEATHER_MAX_TRADES_PER_DAY=${n}` };
+      }
+      case "MODELS": {
+        const models = valueRaw
+          .split(",")
+          .map((m) => m.trim())
+          .filter(Boolean)
+          .join(",");
+        if (!models) {
+          return { ok: false, msg: "WEATHER_MODELS cannot be empty." };
+        }
+        w.models = models;
+        return { ok: true, msg: `WEATHER_MODELS=${models}` };
+      }
+      default:
+        return {
+          ok: false,
+          msg: "Unsupported key. Use one of: WEATHER_ENABLED, WEATHER_MIN_PRICE, WEATHER_MAX_PRICE, WEATHER_MIN_LIQUIDITY_USDC, WEATHER_MAX_LIQUIDITY_FRACTION, WEATHER_SPREAD_INFLATION, WEATHER_KDE_BANDWIDTH_F, WEATHER_KDE_LEAD_PER_DAY_F, WEATHER_SCAN_INTERVAL_MS, WEATHER_MAX_TRADES_PER_SCAN, WEATHER_MAX_TRADES_PER_DAY, WEATHER_MODELS.",
+        };
     }
   }
 
@@ -1511,7 +1731,8 @@ export class TelegramBot {
         `/wset 0x... label "Whale #1"\n\n` +
         `/pnl | /history [n] | /status\n` +
         `/orders — active orders\n` +
-        `/weather — forecast predictions & signals\n` +
+        `/weather — report, or /weather on|off\n` +
+        `/weathercfg [KEY VALUE] — show/set weather runtime config\n` +
         `/debug — watcher diagnostics\n` +
         `/reset — clear history (keeps wallets+positions)\n` +
         `/dryrun on|off | /settings\n\n` +
@@ -1710,7 +1931,8 @@ export class TelegramBot {
         { command: "history", description: "Copy history" },
         { command: "orders", description: "Active orders" },
         { command: "status", description: "Bot status" },
-        { command: "weather", description: "Weather predictions & signals" },
+        { command: "weather", description: "Weather report or on/off" },
+        { command: "weathercfg", description: "Show/set weather config" },
         { command: "settings", description: "Global settings" },
         { command: "debug", description: "Watcher diagnostics" },
         { command: "dryrun", description: "Toggle dry-run: /dryrun on|off" },

@@ -59,7 +59,9 @@ const weather: WeatherConfig = {
   minTradeUsdc: parseFloat(process.env.WEATHER_MIN_TRADE_USDC || "1"),
   // Never consume more than this fraction of a bucket's resting liquidity.
   maxLiquidityFraction: parseFloat(
-    process.env.WEATHER_MAX_LIQ_FRACTION || "0.02",
+    process.env.WEATHER_MAX_LIQUIDITY_FRACTION ||
+      process.env.WEATHER_MAX_LIQ_FRACTION ||
+      "0.02",
   ),
   minLiquidityUsdc: parseFloat(process.env.WEATHER_MIN_LIQUIDITY_USDC || "250"),
   // Ignore buys outside this price band (a "0.99 → 1.00" edge isn't tradeable).
