@@ -1233,7 +1233,17 @@ export class TelegramBot {
       const trade = t.originalTrade;
       const time = new Date(t.timestamp).toLocaleTimeString("bg-BG");
       let block = `${icons[t.status] || "?"} *${t.status}* — ${time}\n`;
-      block += `  ${trade.side} $${trade.size.toFixed(2)} @ ${trade.price}`;
+      const attempted = t.execution?.attemptedCopySizeUsdc ?? trade.size;
+      const effective = t.execution?.effectiveCopySizeUsdc ?? attempted;
+      block += `  ${trade.side} $${effective.toFixed(2)} @ ${trade.price}`;
+      if (Math.abs(attempted - effective) > 0.0001) {
+        block += `\n  requested: $${attempted.toFixed(2)} → executed: $${effective.toFixed(2)}`;
+      }
+      if (t.execution) {
+        block +=
+          `\n  fee: $${t.execution.estimatedFeeUsdc.toFixed(4)} (${t.execution.feeBps} bps)` +
+          ` | proc: ${t.execution.processingMs}ms`;
+      }
       if (t.orderId) block += `\n  \`${t.orderId}\``;
       if (t.reason) block += `\n  _${t.reason}_`;
       return block;
@@ -1377,7 +1387,10 @@ export class TelegramBot {
         `Dry run: ${config.dryRun ? "🔵 ON" : "🔴 OFF"}\n` +
         `Order type: \`${config.orderType}\`\n` +
         `Poll: \`${config.pollIntervalMs / 1000}s\`\n` +
-        `Min trade: \`$${config.minTradeUsdc}\`\n\n` +
+        `Min trade: \`$${config.minTradeUsdc}\`\n` +
+        `Live fee est: \`${config.liveFeeBps} bps\`\n` +
+        `Dry fee est: \`${config.dryRunFeeBps} bps\`\n` +
+        `Dry submit latency: \`${config.dryRunSimulatedOrderLatencyMs} ms\`\n\n` +
         `Per-wallet: /wallets → pick wallet\n\n` +
         `/dryrun on|off | /debug`,
       { parse_mode: "Markdown" },
@@ -1612,6 +1625,8 @@ export class TelegramBot {
     question: string,
     status: string,
     orderId?: string,
+    execution?: CopiedTrade["execution"],
+    reason?: string,
   ) {
     const icons: Record<string, string> = {
       PLACED: "✅",
@@ -1625,6 +1640,11 @@ export class TelegramBot {
       `${question.slice(0, 50)}\n` +
       `*${side}* $${size.toFixed(2)} @ ${price} | ${src}\n` +
       `Status: *${status}*` +
+      (execution
+        ? `\nFee(est): $${execution.estimatedFeeUsdc.toFixed(4)} (${execution.feeBps} bps)` +
+          `\nTiming: ${execution.processingMs}ms (market ${execution.marketInfoMs}ms, submit ${execution.orderSubmitMs}ms)`
+        : "") +
+      (reason ? `\n_${reason}_` : "") +
       (orderId ? `\n\`${orderId}\`` : "");
     await this.send(msg);
   }

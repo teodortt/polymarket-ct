@@ -58,13 +58,16 @@ export class PnLTracker {
     price: number,
     sourceWallet?: string,
     walletLabel?: string,
+    feeUsdc = 0,
   ) {
     const shares = price > 0 ? sizeUsdc / price : 0;
+    const safeFee = Number.isFinite(feeUsdc) && feeUsdc > 0 ? feeUsdc : 0;
 
     // Track simulated cash flow for dry-run "balance" view.
     // BUY drains cash; SELL refunds proceeds. Real-trade balances come
     // from on-chain USDC instead of this counter.
-    this.dryRunCashFlow += side === "BUY" ? -sizeUsdc : sizeUsdc;
+    this.dryRunCashFlow +=
+      side === "BUY" ? -(sizeUsdc + safeFee) : sizeUsdc - safeFee;
 
     // ── position tracker ──────────────────────────────────────────────────────
     const existing = this.positions.get(tokenId);
@@ -76,9 +79,9 @@ export class PnLTracker {
         question,
         outcome,
         side,
-        totalSizeUsdc: sizeUsdc,
+        totalSizeUsdc: sizeUsdc + safeFee,
         totalShares: side === "BUY" ? shares : -shares,
-        avgPrice: price,
+        avgPrice: shares > 0 ? (sizeUsdc + safeFee) / shares : price,
         realizedPnl: 0,
         trades: 1,
         sourceWallets: sourceWallet ? [sourceWallet] : [],
@@ -88,13 +91,13 @@ export class PnLTracker {
       const newShares = existing.totalShares + shares;
       if (existing.totalShares > 0 && newShares > 0) {
         existing.avgPrice =
-          (existing.avgPrice * existing.totalShares + price * shares) /
+          (existing.avgPrice * existing.totalShares + (sizeUsdc + safeFee)) /
           newShares;
       } else if (existing.totalShares <= 0 && newShares > 0) {
         // Flipped from short/flat to long — reset avg to current price
-        existing.avgPrice = price;
+        existing.avgPrice = shares > 0 ? (sizeUsdc + safeFee) / shares : price;
       }
-      existing.totalSizeUsdc += sizeUsdc;
+      existing.totalSizeUsdc += sizeUsdc + safeFee;
       existing.totalShares = newShares;
       existing.trades++;
       if (sourceWallet && !existing.sourceWallets.includes(sourceWallet)) {
@@ -104,7 +107,7 @@ export class PnLTracker {
       // SELL — realize P&L on the closed portion, reduce share count
       const closing = Math.min(shares, Math.max(existing.totalShares, 0));
       if (closing > 0) {
-        existing.realizedPnl += (price - existing.avgPrice) * closing;
+        existing.realizedPnl += (price - existing.avgPrice) * closing - safeFee;
         // Reduce invested proportionally (cost basis of sold shares)
         existing.totalSizeUsdc = Math.max(
           0,
@@ -128,12 +131,12 @@ export class PnLTracker {
           date: today,
           wallet: sourceWallet,
           walletLabel: walletLabel,
-          invested: sizeUsdc,
+          invested: sizeUsdc + (side === "BUY" ? safeFee : 0),
           pnl: 0, // updated after price refresh
           trades: 1,
         });
       } else {
-        rec.invested += sizeUsdc;
+        rec.invested += sizeUsdc + (side === "BUY" ? safeFee : 0);
         rec.trades++;
         if (walletLabel) rec.walletLabel = walletLabel;
       }

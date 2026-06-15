@@ -29,6 +29,18 @@ export interface CopiedTrade {
   reason?: string;
   timestamp: number;
   sourceWallet?: string; // wallet whose trade was copied
+  execution?: {
+    mode: "LIVE" | "DRY_RUN";
+    attemptedCopySizeUsdc: number;
+    effectiveCopySizeUsdc: number;
+    grossUsdc: number;
+    estimatedFeeUsdc: number;
+    feeBps: number;
+    netUsdc: number;
+    processingMs: number;
+    marketInfoMs: number;
+    orderSubmitMs: number;
+  };
 }
 
 export interface WalletConfig {
