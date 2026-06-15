@@ -31,8 +31,35 @@ export function formatReport(
   const lines: string[] = [];
 
   lines.push(`🌦 ${b("Weather predictions")} (scan ${ago(opts.lastScanAt)})`);
+
   if (opts.enabled === false) {
-    lines.push("_module disabled — set WEATHER_ENABLED=true_");
+    lines.push(
+      "\n⏸ *Weather module is OFF*\n" +
+        "Enable it with `/weather on` or set `WEATHER_ENABLED=true` in env.\n" +
+        "The engine will start scanning every 20 minutes once enabled.",
+    );
+    if (trades.length > 0) {
+      lines.push(`\n${b("Recent weather trades:")}`);
+      for (const t of trades) {
+        const icon =
+          t.status === "PLACED"
+            ? "✅"
+            : t.status === "DRY_RUN"
+              ? "🔵"
+              : t.status === "SKIPPED"
+                ? "⏭️"
+                : "❌";
+        const when = new Date(t.ts)
+          .toISOString()
+          .slice(5, 16)
+          .replace("T", " ");
+        lines.push(
+          `${icon} ${when} ${t.city} ${t.targetDate} ${t.bucketLabel} ` +
+            `$${t.sizeUsdc.toFixed(2)} @ ${t.price}`,
+        );
+      }
+    }
+    return lines.join("\n");
   }
 
   if (signals.length === 0) {
