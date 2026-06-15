@@ -148,8 +148,6 @@ async function tryPlaceOrderWithClient(
   const adjustedPrice = adjustPriceToTick(trade.price, tickSize);
   const size = toLimitOrderSizeShares(trade.side, copySize, adjustedPrice);
 
-  const orderType = config.orderType === "GTD" ? OrderType.GTD : OrderType.GTC;
-
   return c.createAndPostOrder(
     {
       tokenID: trade.tokenId,
@@ -158,53 +156,8 @@ async function tryPlaceOrderWithClient(
       side,
     },
     orderOpts,
-    orderType,
+    OrderType.GTC,
   );
-}
-
-function feeBpsForMode(isDryRun: boolean): number {
-  const raw = isDryRun ? config.dryRunFeeBps : config.liveFeeBps;
-  if (!Number.isFinite(raw) || raw < 0) return 0;
-  return raw;
-}
-
-function feeFromNotional(notionalUsdc: number, feeBps: number): number {
-  return (notionalUsdc * feeBps) / 10_000;
-}
-
-function finalizeExecutionMeta(
-  result: CopiedTrade,
-  attemptedCopySizeUsdc: number,
-  effectiveCopySizeUsdc: number,
-  marketInfoMs: number,
-  orderSubmitMs: number,
-  startedAt: number,
-  isDryRun: boolean,
-) {
-  const feeBps = feeBpsForMode(isDryRun);
-  const grossUsdc = effectiveCopySizeUsdc;
-  const estimatedFeeUsdc = feeFromNotional(grossUsdc, feeBps);
-  const netUsdc =
-    result.originalTrade.side === "BUY"
-      ? grossUsdc + estimatedFeeUsdc
-      : grossUsdc - estimatedFeeUsdc;
-  result.execution = {
-    mode: isDryRun ? "DRY_RUN" : "LIVE",
-    attemptedCopySizeUsdc,
-    effectiveCopySizeUsdc,
-    grossUsdc,
-    estimatedFeeUsdc,
-    feeBps,
-    netUsdc,
-    processingMs: Date.now() - startedAt,
-    marketInfoMs,
-    orderSubmitMs,
-  };
-}
-
-async function sleep(ms: number): Promise<void> {
-  if (ms <= 0) return;
-  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function getAvailableCollateralUsdc(
@@ -272,9 +225,6 @@ export async function copyTradeWithSize(
   trade: Trade,
   copySize: number,
 ): Promise<CopiedTrade> {
-  const startedAt = Date.now();
-  let marketInfoMs = 0;
-  let orderSubmitMs = 0;
   const result: CopiedTrade = {
     originalTrade: trade,
     status: "SKIPPED",
@@ -283,46 +233,32 @@ export async function copyTradeWithSize(
 
   if (copySize < config.minTradeUsdc) {
     result.reason = `Size too small: $${copySize.toFixed(2)} < $${config.minTradeUsdc}`;
-    finalizeExecutionMeta(
-      result,
-      copySize,
-      copySize,
-      marketInfoMs,
-      orderSubmitMs,
-      startedAt,
-      config.dryRun,
-    );
     return result;
   }
 
-  const marketInfoStart = Date.now();
   const marketInfo: MarketInfo | null = await getMarketInfo(
     trade.tokenId,
     trade.market,
   );
-  marketInfoMs = Date.now() - marketInfoStart;
   if (!marketInfo) {
     result.status = "FAILED";
     result.reason = `Could not fetch market info for ${trade.tokenId}`;
-    finalizeExecutionMeta(
-      result,
-      copySize,
-      copySize,
-      marketInfoMs,
-      orderSubmitMs,
-      startedAt,
-      config.dryRun,
-    );
+    return result;
+  }
+
+  if (config.dryRun) {
+    result.status = "DRY_RUN";
+    result.reason = `DRY_RUN: ${trade.side} $${copySize.toFixed(2)} @ ${trade.price}`;
     return result;
   }
 
   try {
-    const c = config.dryRun ? null : await initTrader();
+    const c = await initTrader();
     let effectiveCopySize = copySize;
 
     // Preflight BUY sizing by available collateral to avoid avoidable rejects.
     if (trade.side === "BUY") {
-      const available = c ? await getAvailableCollateralUsdc(c) : null;
+      const available = await getAvailableCollateralUsdc(c);
       if (available !== null) {
         // Keep headroom for fees/slippage so we don't consume 100% balance.
         const buffered = Math.max(0, available * 0.97 - 0.02);
@@ -332,51 +268,23 @@ export async function copyTradeWithSize(
           result.reason =
             `Insufficient collateral: available $${available.toFixed(2)} ` +
             `(< min trade $${config.minTradeUsdc.toFixed(2)})`;
-          finalizeExecutionMeta(
-            result,
-            copySize,
-            effectiveCopySize,
-            marketInfoMs,
-            orderSubmitMs,
-            startedAt,
-            config.dryRun,
-          );
           return result;
         }
       }
     }
 
-    const submitStart = Date.now();
-    let response: any;
-    if (config.dryRun) {
-      await sleep(config.dryRunSimulatedOrderLatencyMs);
-      response = {
-        success: true,
-        orderID: `DRY-${trade.id}-${Date.now()}`,
-      };
-    } else {
-      response = await tryPlaceOrderWithClient(
-        c as ClobClient,
-        trade,
-        effectiveCopySize,
-        marketInfo,
-      );
-    }
-    orderSubmitMs = Date.now() - submitStart;
+    let response = await tryPlaceOrderWithClient(
+      c,
+      trade,
+      effectiveCopySize,
+      marketInfo,
+    );
 
     // If server says min order is higher, retry once with that minimum.
-    if (!config.dryRun && !response?.success) {
+    if (!response?.success) {
       const minSize = parseMinSize(response?.errorMsg || response);
       if (minSize && effectiveCopySize < minSize) {
-        effectiveCopySize = minSize;
-        const retryStart = Date.now();
-        response = await tryPlaceOrderWithClient(
-          c as ClobClient,
-          trade,
-          minSize,
-          marketInfo,
-        );
-        orderSubmitMs += Date.now() - retryStart;
+        response = await tryPlaceOrderWithClient(c, trade, minSize, marketInfo);
       }
       // If BUY still hits balance/allowance, downsize once and retry.
       if (
@@ -384,36 +292,27 @@ export async function copyTradeWithSize(
         trade.side === "BUY" &&
         isInsufficientBalance(response?.errorMsg || response)
       ) {
-        const available = await getAvailableCollateralUsdc(c as ClobClient);
+        const available = await getAvailableCollateralUsdc(c);
         if (available !== null) {
           const retrySize = Math.max(0, available * 0.94 - 0.02);
           if (retrySize >= config.minTradeUsdc) {
-            effectiveCopySize = retrySize;
-            const retryStart = Date.now();
             response = await tryPlaceOrderWithClient(
-              c as ClobClient,
+              c,
               trade,
               retrySize,
               marketInfo,
             );
-            orderSubmitMs += Date.now() - retryStart;
           }
         }
       }
     }
 
-    if (
-      !config.dryRun &&
-      !response?.success &&
-      isAuthRetryable(response?.errorMsg || response)
-    ) {
-      const fallbackStart = Date.now();
+    if (!response?.success && isAuthRetryable(response?.errorMsg || response)) {
       const fallback = await retryOrderWithFallbackAuth(
         trade,
         effectiveCopySize,
         marketInfo,
       );
-      orderSubmitMs += Date.now() - fallbackStart;
       if (fallback) response = fallback;
     }
 
@@ -430,64 +329,22 @@ export async function copyTradeWithSize(
       if (isInsufficientBalance(reason)) {
         result.status = "SKIPPED";
         result.reason = reason;
-        finalizeExecutionMeta(
-          result,
-          copySize,
-          effectiveCopySize,
-          marketInfoMs,
-          orderSubmitMs,
-          startedAt,
-          config.dryRun,
-        );
         return result;
       }
       console.error(`[Trader] ❌ Order rejected: ${reason}`);
       result.status = "FAILED";
       result.reason = reason;
-      finalizeExecutionMeta(
-        result,
-        copySize,
-        effectiveCopySize,
-        marketInfoMs,
-        orderSubmitMs,
-        startedAt,
-        config.dryRun,
-      );
       return result;
     }
 
-    console.log(
-      `[Trader] ${config.dryRun ? "🔵 DRY" : "✅ PLACED"} orderId=${response.orderID}`,
-    );
-    result.status = config.dryRun ? "DRY_RUN" : "PLACED";
+    console.log(`[Trader] ✅ PLACED orderId=${response.orderID}`);
+    result.status = "PLACED";
     result.orderId = response.orderID;
-    result.reason =
-      result.status === "DRY_RUN"
-        ? `DRY_RUN: ${trade.side} $${effectiveCopySize.toFixed(2)} @ ${trade.price}`
-        : result.reason;
-    finalizeExecutionMeta(
-      result,
-      copySize,
-      effectiveCopySize,
-      marketInfoMs,
-      orderSubmitMs,
-      startedAt,
-      config.dryRun,
-    );
     return result;
   } catch (err: any) {
     console.error(`[Trader] ❌ createAndPostOrder FAILED: ${err.message}`);
     result.status = "FAILED";
     result.reason = err.message;
-    finalizeExecutionMeta(
-      result,
-      copySize,
-      copySize,
-      marketInfoMs,
-      orderSubmitMs,
-      startedAt,
-      config.dryRun,
-    );
     return result;
   }
 }

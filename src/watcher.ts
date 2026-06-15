@@ -106,25 +106,19 @@ export class CopyTrader {
       const arr = JSON.parse(fs.readFileSync(HISTORY_PATH, "utf8"));
       if (Array.isArray(arr)) {
         this.history = arr;
-        // Replay tracked trades into PnL so /pnl survives restart.
+        // Replay DRY_RUN trades into PnL so /pnl survives restart
         for (const h of arr) {
-          if (
-            (h.status === "DRY_RUN" || h.status === "PLACED") &&
-            h.originalTrade
-          ) {
+          if (h.status === "DRY_RUN" && h.originalTrade) {
             const t = h.originalTrade;
             this.pnl.recordTrade(
               t.tokenId,
               t.market,
               t.outcome,
               t.side,
-              h.execution?.effectiveCopySizeUsdc ??
-                (h as any).copySize ??
-                t.size,
+              h.copySize ?? t.size,
               t.price,
               h.sourceWallet,
               this.cfgStore.get(h.sourceWallet ?? "")?.label,
-              h.execution?.estimatedFeeUsdc ?? 0,
             );
           }
         }
@@ -345,6 +339,8 @@ export class CopyTrader {
 
       const result = await copyTradeWithSize(trade, copySize);
       result.sourceWallet = src;
+      // Stash the actual size we tried to copy (for history replay after restart)
+      (result as any).copySize = copySize;
       this.history.push(result);
       this.saveHistory();
 
@@ -355,13 +351,11 @@ export class CopyTrader {
         src,
         walletCfg?.label,
         trade.side,
-        result.execution?.effectiveCopySizeUsdc ?? copySize,
+        copySize,
         trade.price,
         question,
         result.status,
         result.orderId,
-        result.execution,
-        result.reason,
       );
 
       // Track in PnL when we actually "took" the trade (DRY_RUN simulation
@@ -375,11 +369,10 @@ export class CopyTrader {
           question,
           trade.outcome,
           trade.side,
-          result.execution?.effectiveCopySizeUsdc ?? copySize,
+          copySize,
           trade.price,
           src,
           walletCfg?.label,
-          result.execution?.estimatedFeeUsdc ?? 0,
         );
         if (config.dryRun) {
           await this.pnl.refreshPrices();
@@ -431,6 +424,7 @@ export class CopyTrader {
 
     const result = await copyTradeWithSize(trade, copySize);
     result.sourceWallet = wallet;
+    (result as any).copySize = copySize;
     this.history.push(result);
     this.saveHistory();
     watcher.seen.add(trade.id);
@@ -441,13 +435,11 @@ export class CopyTrader {
       wallet,
       cfg?.label,
       trade.side,
-      result.execution?.effectiveCopySizeUsdc ?? copySize,
+      copySize,
       trade.price,
       question,
       result.status,
       result.orderId,
-      result.execution,
-      result.reason,
     );
 
     return {

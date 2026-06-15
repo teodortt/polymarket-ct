@@ -46,21 +46,15 @@ export const config = {
   // Polymarket CLOB enforces $1 minimum on most markets — keep at 1 unless you know better.
   minTradeUsdc: parseFloat(process.env.MIN_TRADE_USDC || "1"),
   // Order type for live mode. GTC = Good-Til-Cancelled (order stays until filled or cancelled).
-  // Supported values in clob-client-v2 are GTC and GTD.
-  orderType: (process.env.ORDER_TYPE || "GTC").toUpperCase() as "GTC" | "GTD",
+  // This is most reliable with Polymarket's CLOB API.
+  orderType: (process.env.ORDER_TYPE || "GTC").toUpperCase() as
+    | "FAK"
+    | "GTC"
+    | "FOK",
   dryRun: process.env.DRY_RUN !== "false",
   // Virtual starting balance used in dry-run mode so the bot can show how
   // much "money" you'd have left after the simulated trades.
   dryRunStartUsdc: parseFloat(process.env.DRY_RUN_START_USDC || "1000"),
-  // Fee model used for both live estimates and dry-run accounting.
-  // Example: 35 = 0.35%.
-  liveFeeBps: parseFloat(process.env.LIVE_FEE_BPS || "0"),
-  dryRunFeeBps: parseFloat(process.env.DRY_RUN_FEE_BPS || "0"),
-  // Synthetic submit latency in dry-run so reported processing is closer to
-  // real runtime behavior.
-  dryRunSimulatedOrderLatencyMs: parseInt(
-    process.env.DRY_RUN_SIMULATED_ORDER_LATENCY_MS || "250",
-  ),
 
   // Optional SOCKS5/HTTP proxy (e.g. Cloudflare WARP: socks5://127.0.0.1:40000)
   proxyUrl: process.env.PROXY_URL || "",
