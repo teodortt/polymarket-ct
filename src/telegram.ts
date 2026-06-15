@@ -317,6 +317,9 @@ export class TelegramBot {
   private getDebug!: GetDebugFn;
   private clearHistory!: ClearHistoryFn;
   private walletCfgs!: WalletConfigStore;
+  // Optional provider for the weather module's report (injected from index.ts
+  // when WEATHER_ENABLED). Left undefined keeps /weather a graceful no-op.
+  private weatherReport?: () => string | Promise<string>;
 
   constructor() {
     this.bot = new Telegraf(config.telegramBotToken);
@@ -346,6 +349,11 @@ export class TelegramBot {
     walletCfgs: WalletConfigStore;
   }) {
     Object.assign(this, callbacks);
+  }
+
+  // Inject the weather module's report renderer (optional subsystem).
+  setWeatherReportProvider(fn: () => string | Promise<string>) {
+    this.weatherReport = fn;
   }
 
   private allowed(ctx: Context): boolean {
@@ -487,6 +495,7 @@ export class TelegramBot {
             Markup.button.callback("ℹ️ Status", "menu:status"),
             Markup.button.callback("❓ Help", "menu:help"),
           ],
+          [Markup.button.callback("🌦 Weather", "menu:weather")],
         ]),
       });
     });
@@ -530,6 +539,8 @@ export class TelegramBot {
           return this.handleStatus(ctx);
         case "help":
           return this.handleHelp(ctx);
+        case "weather":
+          return this.handleWeather(ctx);
       }
     });
 
@@ -695,6 +706,15 @@ export class TelegramBot {
     // Status
     b.command("status", (ctx) => this.handleStatus(ctx));
     b.hears("ℹ️ Status", (ctx) => this.handleStatus(ctx));
+
+    // Weather predictions + signals
+    b.command("weather", (ctx) => this.handleWeather(ctx));
+    b.hears("🌦 Weather", (ctx) => this.handleWeather(ctx));
+    b.action("refresh:weather", (ctx) => {
+      if (!this.allowed(ctx)) return;
+      ctx.answerCbQuery().catch(() => {});
+      this.handleWeather(ctx);
+    });
 
     // Settings
     b.command("settings", (ctx) => this.handleSettings(ctx));
@@ -1456,6 +1476,25 @@ export class TelegramBot {
     this.replyTo(ctx, text, Markup.inlineKeyboard(buttons));
   }
 
+  // ─── Weather predictions ──────────────────────────────────────────────────────
+  private async handleWeather(ctx: Context) {
+    if (!this.allowed(ctx)) return;
+    if (!this.weatherReport) {
+      return this.editOrReply(
+        ctx,
+        "🌦 *Weather module disabled.*\n\n" +
+          "Set `WEATHER_ENABLED=true` to enable forecast-based predictions " +
+          "and auto-trading of temperature markets.",
+      );
+    }
+    try {
+      const text = await this.weatherReport();
+      this.editOrReply(ctx, text, this.refreshBtn("refresh:weather"));
+    } catch (err: any) {
+      this.editOrReply(ctx, `❌ Weather report failed: ${err?.message ?? err}`);
+    }
+  }
+
   // ─── Help ─────────────────────────────────────────────────────────────────────
   private handleHelp(ctx: Context) {
     if (!this.allowed(ctx)) return;
@@ -1472,6 +1511,7 @@ export class TelegramBot {
         `/wset 0x... label "Whale #1"\n\n` +
         `/pnl | /history [n] | /status\n` +
         `/orders — active orders\n` +
+        `/weather — forecast predictions & signals\n` +
         `/debug — watcher diagnostics\n` +
         `/reset — clear history (keeps wallets+positions)\n` +
         `/dryrun on|off | /settings\n\n` +
@@ -1670,6 +1710,7 @@ export class TelegramBot {
         { command: "history", description: "Copy history" },
         { command: "orders", description: "Active orders" },
         { command: "status", description: "Bot status" },
+        { command: "weather", description: "Weather predictions & signals" },
         { command: "settings", description: "Global settings" },
         { command: "debug", description: "Watcher diagnostics" },
         { command: "dryrun", description: "Toggle dry-run: /dryrun on|off" },

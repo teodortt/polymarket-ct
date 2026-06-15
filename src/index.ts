@@ -3,6 +3,7 @@ import { setupProxy, verifyProxy } from "./proxy";
 import { TelegramBot } from "./telegram";
 import { CopyTrader } from "./watcher";
 import { initTrader } from "./trader";
+import { WeatherEngine } from "./weather/engine";
 
 async function main() {
   // Apply WARP SOCKS5 proxy before any network calls
@@ -36,9 +37,22 @@ async function main() {
   // Give Telegram a moment to connect before polling starts
   await new Promise((r) => setTimeout(r, 1500));
 
+  // 4. Optional weather prediction + auto-trading engine (independent loop)
+  let weather: WeatherEngine | null = null;
+  if (config.weather.enabled) {
+    weather = new WeatherEngine(tg);
+    tg.setWeatherReportProvider(() => weather!.getReport());
+    weather
+      .start()
+      .catch((err: Error) =>
+        console.error("[Weather] engine error:", err.message),
+      );
+  }
+
   process.on("SIGINT", async () => {
     console.log("\n\n[Main] Shutting down...");
     bot.stop();
+    weather?.stop();
     await tg.send("🛑 CopyBot stopped.");
     tg.stop();
     const history = bot.getHistory();

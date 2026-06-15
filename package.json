@@ -8,7 +8,8 @@
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "watch": "ts-node-dev --respawn src/index.ts",
-    "test:copy-one": "node scripts/testCopyOne.js"
+    "test:copy-one": "node scripts/testCopyOne.js",
+    "weather:scan": "ts-node src/weather/cli.ts"
   },
   "dependencies": {
     "@polymarket/clob-client-v2": "^1.0.6",
