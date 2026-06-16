@@ -341,6 +341,11 @@ export class CopyTrader {
       result.sourceWallet = src;
       // Stash the actual size we tried to copy (for history replay after restart)
       (result as any).copySize = copySize;
+      if (result.status !== "PLACED") {
+        console.log(
+          `[Watcher] ${result.status} ${src.slice(0, 10)}…: ${result.reason || "no reason"}`,
+        );
+      }
       this.history.push(result);
       this.saveHistory();
 
@@ -355,6 +360,7 @@ export class CopyTrader {
         trade.price,
         question,
         result.status,
+        result.reason,
         result.orderId,
       );
 
@@ -439,6 +445,7 @@ export class CopyTrader {
       trade.price,
       question,
       result.status,
+      result.reason,
       result.orderId,
     );
 

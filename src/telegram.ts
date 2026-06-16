@@ -1872,6 +1872,7 @@ export class TelegramBot {
     price: number,
     question: string,
     status: string,
+    reason?: string,
     orderId?: string,
   ) {
     const icons: Record<string, string> = {
@@ -1886,6 +1887,7 @@ export class TelegramBot {
       `${question.slice(0, 50)}\n` +
       `*${side}* $${size.toFixed(2)} @ ${price} | ${src}\n` +
       `Status: *${status}*` +
+      (reason ? `\n_${reason.slice(0, 300)}_` : "") +
       (orderId ? `\n\`${orderId}\`` : "");
     await this.send(msg);
   }
