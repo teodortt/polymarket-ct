@@ -19,7 +19,6 @@ export interface WeatherNotifier {
 }
 
 export interface WeatherDataProviders {
-  getPnL?: () => any;
   getOrders?: () => Promise<any[]>;
 }
 
@@ -275,7 +274,6 @@ export class WeatherEngine {
 
   // ── reporting ─────────────────────────────────────────────────────────────────
   async getReport(): Promise<string> {
-    const pnl = this.dataProviders.getPnL?.();
     const orders = this.dataProviders.getOrders
       ? await this.dataProviders.getOrders()
       : undefined;
@@ -284,7 +282,7 @@ export class WeatherEngine {
       markdown: true,
       lastScanAt: this.lastScanAt,
       enabled: this.cfg.enabled,
-      pnl,
+      allWeatherTrades: this.state.trades,
       orders,
     });
   }

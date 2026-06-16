@@ -41,7 +41,6 @@ async function main() {
   // It stays alive in standby when disabled, so Telegram can enable it later
   // without requiring a process restart.
   const weather = new WeatherEngine(tg, {
-    getPnL: () => bot.getPnL(),
     getOrders: async () => {
       try {
         const { getOpenOrders } = await import("./trader");
