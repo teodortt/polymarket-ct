@@ -9,7 +9,8 @@ module.exports = {
             max_restarts: 10,
             node_args: "--no-deprecation",
             env: {
-                NODE_ENV: "production"
+                NODE_ENV: "production",
+                DRY_RUN: "false"
             },
             error_file: "./logs/error.log",
             out_file: "./logs/out.log",
