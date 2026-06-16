@@ -88,6 +88,7 @@ export class CopyTrader {
       removeWallet: (w) => this.removeWallet(w),
       walletExposure: (w) => this.walletExposure(w),
       cancelOrdersForWallet: (w) => this.cancelOrdersForWallet(w),
+      forceCopyLast: (w) => this.forceCopyLast(w),
       getHistory: () => this.history,
       getPnL: () => this.pnl,
       setDryRun: (v) => {

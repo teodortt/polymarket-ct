@@ -295,6 +295,9 @@ type WalletExposureFn = (wallet: string) => {
 type CancelOrdersForWalletFn = (
   wallet: string,
 ) => Promise<{ ok: boolean; cancelled: number; reason?: string }>;
+type ForceCopyLastFn = (
+  wallet: string,
+) => Promise<{ ok: boolean; msg: string }>;
 type GetHistoryFn = () => CopiedTrade[];
 type GetPnLFn = () => PnLTracker;
 type SetDryRunFn = (val: boolean) => void;
@@ -321,6 +324,7 @@ export class TelegramBot {
   private removeWallet!: RemoveWalletFn;
   private walletExposure!: WalletExposureFn;
   private cancelOrdersForWallet!: CancelOrdersForWalletFn;
+  private forceCopyLast!: ForceCopyLastFn;
   private getHistory!: GetHistoryFn;
   private getPnL!: GetPnLFn;
   private setDryRun!: SetDryRunFn;
@@ -351,6 +355,7 @@ export class TelegramBot {
     removeWallet: RemoveWalletFn;
     walletExposure: WalletExposureFn;
     cancelOrdersForWallet: CancelOrdersForWalletFn;
+    forceCopyLast: ForceCopyLastFn;
     getHistory: GetHistoryFn;
     getPnL: GetPnLFn;
     setDryRun: SetDryRunFn;
@@ -717,6 +722,22 @@ export class TelegramBot {
     // Status
     b.command("status", (ctx) => this.handleStatus(ctx));
     b.hears("ℹ️ Status", (ctx) => this.handleStatus(ctx));
+
+    // Manual retry: force-copy the wallet's latest trade through the same
+    // live pipeline (sizing, dry-run/live routing, notifications).
+    b.command("retry", async (ctx) => {
+      if (!this.allowed(ctx)) return;
+      const wallet = ctx.message.text.split(" ")[1]?.trim();
+      if (!wallet) {
+        return ctx.reply("Usage: /retry 0xWALLET");
+      }
+      const res = await this.forceCopyLast(wallet);
+      const icon = res.ok ? "✅" : "❌";
+      return this.replyTo(
+        ctx,
+        `${icon} /retry ${wallet.slice(0, 10)}…\n${res.msg}`,
+      );
+    });
 
     // Weather predictions + signals
     b.command("weather", (ctx) => {
@@ -1730,6 +1751,7 @@ export class TelegramBot {
         `/wset 0x... percent 50\n` +
         `/wset 0x... label "Whale #1"\n\n` +
         `/pnl | /history [n] | /status\n` +
+        `/retry 0x... — force copy latest trade once\n` +
         `/orders — active orders\n` +
         `/weather — report, or /weather on|off\n` +
         `/weathercfg [KEY VALUE] — show/set weather runtime config\n` +
@@ -1933,6 +1955,7 @@ export class TelegramBot {
         { command: "history", description: "Copy history" },
         { command: "orders", description: "Active orders" },
         { command: "status", description: "Bot status" },
+        { command: "retry", description: "Force-copy latest trade once" },
         { command: "weather", description: "Weather report or on/off" },
         { command: "weathercfg", description: "Show/set weather config" },
         { command: "settings", description: "Global settings" },
