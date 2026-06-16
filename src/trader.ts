@@ -375,24 +375,23 @@ export async function cancelOrdersByIds(
   }
 }
 
-// Reads the on-chain USDC.e balance of the live trading wallet (the funder
-// address if set, otherwise the EOA derived from PRIVATE_KEY). Returns the
-// balance as a USDC float (6 decimals). Returns null on RPC failure so the
-// caller can render "n/a" instead of crashing.
+// Reads the Polymarket collateral balance (USDC deposited in Polymarket account,
+// not on-chain wallet balance). Returns the balance as a USDC float. Returns null
+// on API failure so the caller can render "n/a" instead of crashing.
 export async function getLiveUsdcBalance(): Promise<{
   address: `0x${string}`;
   balance: number;
 } | null> {
   try {
+    const c = await initTrader();
     const account = privateKeyToAccount(config.privateKey as `0x${string}`);
     const address = (config.funderAddress || account.address) as `0x${string}`;
-    const raw = (await publicClient.readContract({
-      address: USDC_E_POLYGON,
-      abi: erc20Abi,
-      functionName: "balanceOf",
-      args: [address],
-    })) as bigint;
-    return { address, balance: Number(raw) / 1_000_000 };
+
+    // Get Polymarket collateral balance via CLOB API
+    const available = await getAvailableCollateralUsdc(c);
+    if (available === null) return null;
+
+    return { address, balance: available };
   } catch (err: any) {
     console.error("[Trader] getLiveUsdcBalance failed:", err?.message ?? err);
     return null;
