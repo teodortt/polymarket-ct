@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import axios from "axios";
 import { config } from "../config";
 import { Trade, WeatherSignal, WeatherTradeRecord } from "../types";
 import { copyTradeWithSize, getLiveUsdcBalance } from "../trader";
@@ -12,6 +13,7 @@ import { formatReport } from "./report";
 const DATA_DIR = path.join(process.cwd(), "data");
 const STATE_PATH = path.join(DATA_DIR, "weather.json");
 const TRADES_MAX = 1000;
+const CLOB_API = "https://clob.polymarket.com";
 
 // Minimal sink so the engine never depends on the Telegram module directly.
 export interface WeatherNotifier {
@@ -273,16 +275,78 @@ export class WeatherEngine {
   }
 
   // ── reporting ─────────────────────────────────────────────────────────────────
+  private async calculateWeatherPnL(): Promise<{
+    totalPnl: number;
+    totalInvested: number;
+    byDate: Record<string, { pnl: number; invested: number }>;
+  }> {
+    const openTrades = this.state.trades.filter(
+      (t) => t.status === "PLACED" || t.status === "DRY_RUN",
+    );
+
+    if (openTrades.length === 0) {
+      return { totalPnl: 0, totalInvested: 0, byDate: {} };
+    }
+
+    // Fetch current prices for unique tokenIds
+    const tokenIdPrices: Record<string, number> = {};
+    const uniqueTokenIds = [...new Set(openTrades.map((t) => t.tokenId))];
+
+    for (const tokenId of uniqueTokenIds) {
+      try {
+        const res = await axios.get(`${CLOB_API}/price`, {
+          params: { token_id: tokenId, side: "BUY" },
+          timeout: 3000,
+        });
+        const currentPrice = parseFloat(res.data?.price ?? "0");
+        if (currentPrice > 0) {
+          tokenIdPrices[tokenId] = currentPrice;
+        }
+      } catch {
+        // Skip on error
+      }
+    }
+
+    // Calculate PNL per trade
+    let totalPnl = 0;
+    let totalInvested = 0;
+    const byDate: Record<string, { pnl: number; invested: number }> = {};
+
+    for (const trade of openTrades) {
+      const currentPrice = tokenIdPrices[trade.tokenId];
+      const invested = trade.sizeUsdc;
+      totalInvested += invested;
+
+      const date = new Date(trade.ts).toISOString().slice(0, 10);
+      if (!byDate[date]) {
+        byDate[date] = { pnl: 0, invested: 0 };
+      }
+      byDate[date].invested += invested;
+
+      if (currentPrice && currentPrice > 0) {
+        const shares = invested / trade.price;
+        const pnl = (currentPrice - trade.price) * shares;
+        totalPnl += pnl;
+        byDate[date].pnl += pnl;
+      }
+    }
+
+    return { totalPnl, totalInvested, byDate };
+  }
+
   async getReport(): Promise<string> {
     const orders = this.dataProviders.getOrders
       ? await this.dataProviders.getOrders()
       : undefined;
+
+    const pnlData = await this.calculateWeatherPnL();
 
     return formatReport(this.lastSignals, this.recentTrades(8), {
       markdown: true,
       lastScanAt: this.lastScanAt,
       enabled: this.cfg.enabled,
       allWeatherTrades: this.state.trades,
+      weatherPnL: pnlData,
       orders,
     });
   }

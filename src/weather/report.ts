@@ -6,6 +6,11 @@ interface ReportOpts {
   enabled?: boolean;
   maxEvents?: number;
   allWeatherTrades?: any[];
+  weatherPnL?: {
+    totalPnl: number;
+    totalInvested: number;
+    byDate: Record<string, any>;
+  };
   orders?: any[];
 }
 
@@ -34,7 +39,7 @@ export function formatReport(
 
   lines.push(`🌦 ${b("Weather predictions")} (scan ${ago(opts.lastScanAt)})`);
 
-  // Weather-specific stats (independent from bot's copy-trading P&L)
+  // Weather-specific stats with P&L (independent from bot's copy-trading P&L)
   if (opts.allWeatherTrades && opts.allWeatherTrades.length > 0) {
     const placed = opts.allWeatherTrades.filter(
       (t: any) => t.status === "PLACED" || t.status === "DRY_RUN",
@@ -51,13 +56,26 @@ export function formatReport(
       (t: any) => t.status === "FAILED",
     ).length;
 
+    // Overall PNL section
+    let pnlLine = "";
+    if (opts.weatherPnL && placedCount > 0) {
+      const { totalPnl } = opts.weatherPnL;
+      const returnPct =
+        totalInvested > 0 ? (totalPnl / totalInvested) * 100 : 0;
+      const arrow = totalPnl >= 0 ? "▲" : "▼";
+      const emoji = totalPnl >= 0 ? "📈" : "📉";
+      pnlLine =
+        `\n${emoji} ${b("P&L:")} ${arrow} ${totalPnl >= 0 ? "+" : ""}$${totalPnl.toFixed(2)} ` +
+        `(${totalPnl >= 0 ? "+" : ""}${returnPct.toFixed(1)}%)`;
+    }
+
     lines.push(
       `\n${b("Weather trades summary:")}` +
         ` | Placed: ${placedCount} | Skipped: ${skipped} | Failed: ${failed}` +
-        ` | Total invested: $${totalInvested.toFixed(2)}`,
+        ` | Invested: $${totalInvested.toFixed(2)}${pnlLine}`,
     );
 
-    // Daily breakdown by date (weather trades only)
+    // Daily breakdown by date (weather trades only) with PNL
     const byDate = new Map<string, any[]>();
     for (const trade of opts.allWeatherTrades) {
       const date = new Date(trade.ts).toISOString().slice(0, 10);
@@ -77,9 +95,20 @@ export function formatReport(
         const daySkipped = trades.filter((t) => t.status === "SKIPPED").length;
         const dayFailed = trades.filter((t) => t.status === "FAILED").length;
 
+        // Add P&L for this day if available
+        let dayPnlStr = "";
+        if (opts.weatherPnL && opts.weatherPnL.byDate[date]) {
+          const dayData = opts.weatherPnL.byDate[date];
+          const dayPnl = dayData.pnl;
+          const dayReturnPct =
+            dayData.invested > 0 ? (dayPnl / dayData.invested) * 100 : 0;
+          const dayArrow = dayPnl >= 0 ? "▲" : "▼";
+          dayPnlStr = ` | ${dayArrow} ${dayPnl >= 0 ? "+" : ""}$${dayPnl.toFixed(2)} (${dayPnl >= 0 ? "+" : ""}${dayReturnPct.toFixed(1)}%)`;
+        }
+
         lines.push(
           `  ${date}: ${dayPlaced.length} placed | $${dayInvested.toFixed(2)} invested | ` +
-            `${daySkipped} skipped | ${dayFailed} failed`,
+            `${daySkipped} skipped | ${dayFailed} failed${dayPnlStr}`,
         );
       }
     }
