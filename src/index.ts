@@ -40,7 +40,17 @@ async function main() {
   // 4. Weather prediction + auto-trading engine (independent loop).
   // It stays alive in standby when disabled, so Telegram can enable it later
   // without requiring a process restart.
-  const weather = new WeatherEngine(tg);
+  const weather = new WeatherEngine(tg, {
+    getPnL: () => bot.getPnL(),
+    getOrders: async () => {
+      try {
+        const { getOpenOrders } = await import("./trader");
+        return await getOpenOrders();
+      } catch {
+        return [];
+      }
+    },
+  });
   tg.setWeatherReportProvider(() => weather.getReport());
   weather
     .start()

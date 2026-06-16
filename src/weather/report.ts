@@ -1,10 +1,13 @@
 import { WeatherSignal, WeatherTradeRecord } from "../types";
+import type { DailyRecord } from "../pnl";
 
 interface ReportOpts {
   markdown: boolean;
   lastScanAt?: number;
   enabled?: boolean;
   maxEvents?: number;
+  pnl?: any;
+  orders?: any[];
 }
 
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
@@ -31,6 +34,88 @@ export function formatReport(
   const lines: string[] = [];
 
   lines.push(`🌦 ${b("Weather predictions")} (scan ${ago(opts.lastScanAt)})`);
+
+  // Add P&L summary section if available
+  if (opts.pnl) {
+    const positions = opts.pnl.getPositions();
+
+    if (positions.length > 0) {
+      let totalPnl = 0;
+      let totalInvested = 0;
+      let openPositions = 0;
+
+      for (const pos of positions) {
+        totalPnl += pos.totalPnl ?? pos.unrealizedPnl ?? pos.realizedPnl;
+        totalInvested += pos.totalSizeUsdc;
+        if (pos.totalShares > 0) openPositions++;
+      }
+
+      const pnlPct = totalInvested > 0 ? (totalPnl / totalInvested) * 100 : 0;
+      const arrow = totalPnl >= 0 ? "▲" : "▼";
+      const emoji = totalPnl >= 0 ? "📈" : "📉";
+
+      lines.push(
+        `\n${b("Overall P&L:")} ${emoji} ${arrow} ${totalPnl >= 0 ? "+" : ""}$${totalPnl.toFixed(2)} ` +
+          `(${totalPnl >= 0 ? "+" : ""}${pnlPct.toFixed(1)}%)\n` +
+          `Invested: $${totalInvested.toFixed(2)} | Positions: ${openPositions}/${positions.length} open`,
+      );
+
+      // Daily P&L grouped by date across all wallets.
+      const dailyRecords = opts.pnl.getDailyByWallet(true);
+      if (dailyRecords && dailyRecords.length > 0) {
+        const byDate = new Map<string, DailyRecord[]>();
+        for (const record of dailyRecords) {
+          const current = byDate.get(record.date);
+          if (current) current.push(record);
+          else byDate.set(record.date, [record]);
+        }
+
+        lines.push(`\n${b("Daily P&L:")}`);
+        for (const [date, records] of Array.from(byDate.entries()).sort(
+          (a, b) => a[0].localeCompare(b[0]),
+        )) {
+          const dayPnl = records.reduce(
+            (sum: number, r: DailyRecord) => sum + r.pnl,
+            0,
+          );
+          const dayInvested = records.reduce(
+            (sum: number, r: DailyRecord) => sum + r.invested,
+            0,
+          );
+          const dayTrades = records.reduce(
+            (sum: number, r: DailyRecord) => sum + r.trades,
+            0,
+          );
+          const dayPct = dayInvested > 0 ? (dayPnl / dayInvested) * 100 : 0;
+          const dayArrow = dayPnl >= 0 ? "▲" : "▼";
+
+          lines.push(
+            `  ${date} ${dayArrow} ${dayPnl >= 0 ? "+" : ""}$${dayPnl.toFixed(2)} ` +
+              `(${dayPnl >= 0 ? "+" : ""}${dayPct.toFixed(1)}%) | ` +
+              `Invested $${dayInvested.toFixed(2)} | Trades ${dayTrades}`,
+          );
+        }
+      }
+    }
+  }
+
+  // Add open orders section if available
+  if (opts.orders && opts.orders.length > 0) {
+    lines.push(`\n${b("Open orders:")} ${opts.orders.length}`);
+
+    for (const order of opts.orders) {
+      const side = order.side?.toUpperCase() === "BUY" ? "🟢 BUY" : "🔴 SELL";
+      const price = parseFloat(order.price ?? 0).toFixed(4);
+      const remaining = parseFloat(
+        order.size_remaining ?? order.original_size ?? 0,
+      ).toFixed(2);
+
+      const market = order.market || order.question || order.outcome || "order";
+      const id = order.id ? ` | ${String(order.id).slice(0, 12)}…` : "";
+
+      lines.push(`  ${side} ${market} | $${remaining} @ ${price}${id}`);
+    }
+  }
 
   if (opts.enabled === false) {
     lines.push(

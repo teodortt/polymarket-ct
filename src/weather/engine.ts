@@ -18,6 +18,11 @@ export interface WeatherNotifier {
   send(text: string): Promise<unknown> | unknown;
 }
 
+export interface WeatherDataProviders {
+  getPnL?: () => any;
+  getOrders?: () => Promise<any[]>;
+}
+
 interface WeatherState {
   trades: WeatherTradeRecord[];
   // local-date → token ids already traded that day (dedupe).
@@ -35,13 +40,18 @@ function todayStr(ts = Date.now()): string {
 export class WeatherEngine {
   private cfg = config.weather;
   private notifier?: WeatherNotifier;
+  private dataProviders: WeatherDataProviders = {};
   private running = false;
   private state: WeatherState = { trades: [], traded: {} };
   private lastSignals: WeatherSignal[] = [];
   private lastScanAt = 0;
 
-  constructor(notifier?: WeatherNotifier) {
+  constructor(
+    notifier?: WeatherNotifier,
+    dataProviders?: WeatherDataProviders,
+  ) {
     this.notifier = notifier;
+    this.dataProviders = dataProviders ?? {};
     this.loadState();
   }
 
@@ -264,11 +274,18 @@ export class WeatherEngine {
   }
 
   // ── reporting ─────────────────────────────────────────────────────────────────
-  getReport(): string {
+  async getReport(): Promise<string> {
+    const pnl = this.dataProviders.getPnL?.();
+    const orders = this.dataProviders.getOrders
+      ? await this.dataProviders.getOrders()
+      : undefined;
+
     return formatReport(this.lastSignals, this.recentTrades(8), {
       markdown: true,
       lastScanAt: this.lastScanAt,
       enabled: this.cfg.enabled,
+      pnl,
+      orders,
     });
   }
 
