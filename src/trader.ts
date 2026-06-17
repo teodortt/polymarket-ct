@@ -396,9 +396,11 @@ export async function getLiveUsdcBalance(): Promise<{
     const account = privateKeyToAccount(config.privateKey as `0x${string}`);
     const address = (config.funderAddress || account.address) as `0x${string}`;
 
-    // Get Polymarket collateral balance via CLOB API. Force a refresh so the
-    // status command reflects on-chain truth, not a stale server cache.
-    const available = await getAvailableCollateralUsdc(c, true);
+    // Read the cached collateral balance (no forced refresh). /status can be
+    // called frequently, and updateBalanceAllowance is a write call that adds
+    // CLOB load / rate-limit pressure. The order-placement preflight already
+    // forces a fresh sync where accuracy actually matters.
+    const available = await getAvailableCollateralUsdc(c);
     if (available === null) return null;
 
     return { address, balance: available };
