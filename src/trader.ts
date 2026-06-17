@@ -162,8 +162,19 @@ async function tryPlaceOrderWithClient(
 
 async function getAvailableCollateralUsdc(
   c: ClobClient,
+  forceUpdate = false,
 ): Promise<number | null> {
   try {
+    if (forceUpdate) {
+      // The CLOB caches balance/allowance server-side and can report a stale
+      // $0.00 after deposits or on a freshly-derived API key. updateBalanceAllowance
+      // forces it to re-sync the on-chain balance before we read it.
+      try {
+        await c.updateBalanceAllowance({ asset_type: AssetType.COLLATERAL });
+      } catch {
+        // Non-fatal — fall through and read whatever is currently cached.
+      }
+    }
     const ba = await c.getBalanceAllowance({
       asset_type: AssetType.COLLATERAL,
     });
@@ -258,8 +269,14 @@ export async function copyTradeWithSize(
 
     // Preflight BUY sizing by available collateral to avoid avoidable rejects.
     if (trade.side === "BUY") {
-      const available = await getAvailableCollateralUsdc(c);
-      if (available !== null) {
+      // Force a fresh balance sync — the CLOB otherwise can report a stale $0.00.
+      const available = await getAvailableCollateralUsdc(c, true);
+      // Only downsize when we get a *positive* reading. A 0/null reading means we
+      // couldn't reliably determine the balance (stale cache / API hiccup); in
+      // that case proceed with the requested size and let order placement (with
+      // its auth fallback + balance retry) surface the real error instead of
+      // false-skipping a trade we actually have funds for.
+      if (available !== null && available > 0) {
         // Keep headroom for fees/slippage so we don't consume 100% balance.
         const buffered = Math.max(0, available * 0.97 - 0.02);
         effectiveCopySize = Math.min(copySize, buffered);
@@ -292,8 +309,8 @@ export async function copyTradeWithSize(
         trade.side === "BUY" &&
         isInsufficientBalance(response?.errorMsg || response)
       ) {
-        const available = await getAvailableCollateralUsdc(c);
-        if (available !== null) {
+        const available = await getAvailableCollateralUsdc(c, true);
+        if (available !== null && available > 0) {
           const retrySize = Math.max(0, available * 0.94 - 0.02);
           if (retrySize >= config.minTradeUsdc) {
             response = await tryPlaceOrderWithClient(
@@ -387,8 +404,9 @@ export async function getLiveUsdcBalance(): Promise<{
     const account = privateKeyToAccount(config.privateKey as `0x${string}`);
     const address = (config.funderAddress || account.address) as `0x${string}`;
 
-    // Get Polymarket collateral balance via CLOB API
-    const available = await getAvailableCollateralUsdc(c);
+    // Get Polymarket collateral balance via CLOB API. Force a refresh so the
+    // status command reflects on-chain truth, not a stale server cache.
+    const available = await getAvailableCollateralUsdc(c, true);
     if (available === null) return null;
 
     return { address, balance: available };
