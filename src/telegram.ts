@@ -1439,11 +1439,11 @@ export class TelegramBot {
       const live = await getLiveUsdcBalance();
       if (live) {
         balanceBlock =
-          `\n💰 *On-chain USDC*\n` +
+          `\n💰 *Polymarket collateral (USDC)*\n` +
           `  \`${live.address.slice(0, 10)}…${live.address.slice(-4)}\`\n` +
           `  Available: *$${live.balance.toFixed(2)}*\n`;
       } else {
-        balanceBlock = `\n💰 *On-chain USDC*: _unavailable_\n`;
+        balanceBlock = `\n💰 *Polymarket collateral (USDC)*: _unavailable_\n`;
       }
     }
 
