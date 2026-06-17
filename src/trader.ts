@@ -5,7 +5,7 @@ import {
   Chain,
   AssetType,
 } from "@polymarket/clob-client-v2";
-import { createWalletClient, createPublicClient, http, erc20Abi } from "viem";
+import { createWalletClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
 import { config } from "./config";
@@ -20,14 +20,6 @@ type AuthMode = {
   signatureType: 0 | 1 | 2 | 3;
   funder: string;
 };
-
-// Polymarket settles in USDC.e (bridged USDC) on Polygon.
-const USDC_E_POLYGON =
-  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174" as `0x${string}`;
-const publicClient = createPublicClient({
-  chain: polygon,
-  transport: http(),
-});
 
 function makeAuthKey(mode: AuthMode): string {
   return `${mode.signatureType}:${mode.funder.toLowerCase()}`;
