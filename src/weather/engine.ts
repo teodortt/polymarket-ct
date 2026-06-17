@@ -30,12 +30,26 @@ interface WeatherState {
   traded: Record<string, string[]>;
 }
 
+interface WeatherPnLByDate {
+  pnl: number;
+  invested: number;
+  pricedTrades: number;
+  totalTrades: number;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
 function todayStr(ts = Date.now()): string {
   return new Date(ts).toISOString().slice(0, 10);
+}
+
+function tradeExecutionMode(trade: WeatherTradeRecord): "DRY_RUN" | "LIVE" {
+  if (trade.executionMode === "DRY_RUN" || trade.executionMode === "LIVE") {
+    return trade.executionMode;
+  }
+  return trade.status === "DRY_RUN" ? "DRY_RUN" : "LIVE";
 }
 
 export class WeatherEngine {
@@ -206,6 +220,7 @@ export class WeatherEngine {
 
     const rec: WeatherTradeRecord = {
       ts: Date.now(),
+      executionMode: this.currentExecutionMode(),
       eventId: signal.event.id,
       eventTitle: signal.event.title,
       city: signal.event.city,
@@ -237,13 +252,31 @@ export class WeatherEngine {
     return live?.balance ?? this.cfg.maxTradeUsdc * 10;
   }
 
+  private currentExecutionMode(): "DRY_RUN" | "LIVE" {
+    return config.dryRun ? "DRY_RUN" : "LIVE";
+  }
+
+  private activeTrades(): WeatherTradeRecord[] {
+    const mode = this.currentExecutionMode();
+    return this.state.trades.filter(
+      (trade) => tradeExecutionMode(trade) === mode,
+    );
+  }
+
   private tradedTokens(): string[] {
-    return this.state.traded[todayStr()] ?? [];
+    const today = todayStr();
+    return this.activeTrades()
+      .filter(
+        (trade) =>
+          todayStr(trade.ts) === today &&
+          (trade.status === "PLACED" || trade.status === "DRY_RUN"),
+      )
+      .map((trade) => trade.tokenId);
   }
 
   private tradesToday(): number {
     const t = todayStr();
-    return this.state.trades.filter(
+    return this.activeTrades().filter(
       (r) =>
         todayStr(r.ts) === t &&
         (r.status === "PLACED" || r.status === "DRY_RUN"),
@@ -278,14 +311,14 @@ export class WeatherEngine {
   private async calculateWeatherPnL(): Promise<{
     totalPnl: number;
     totalInvested: number;
-    byDate: Record<string, { pnl: number; invested: number }>;
+    byTargetDate: Record<string, WeatherPnLByDate>;
   }> {
-    const openTrades = this.state.trades.filter(
+    const openTrades = this.activeTrades().filter(
       (t) => t.status === "PLACED" || t.status === "DRY_RUN",
     );
 
     if (openTrades.length === 0) {
-      return { totalPnl: 0, totalInvested: 0, byDate: {} };
+      return { totalPnl: 0, totalInvested: 0, byTargetDate: {} };
     }
 
     // Fetch current prices for unique tokenIds
@@ -310,28 +343,35 @@ export class WeatherEngine {
     // Calculate PNL per trade
     let totalPnl = 0;
     let totalInvested = 0;
-    const byDate: Record<string, { pnl: number; invested: number }> = {};
+    const byTargetDate: Record<string, WeatherPnLByDate> = {};
 
     for (const trade of openTrades) {
       const currentPrice = tokenIdPrices[trade.tokenId];
       const invested = trade.sizeUsdc;
       totalInvested += invested;
 
-      const date = new Date(trade.ts).toISOString().slice(0, 10);
-      if (!byDate[date]) {
-        byDate[date] = { pnl: 0, invested: 0 };
+      const date = trade.targetDate;
+      if (!byTargetDate[date]) {
+        byTargetDate[date] = {
+          pnl: 0,
+          invested: 0,
+          pricedTrades: 0,
+          totalTrades: 0,
+        };
       }
-      byDate[date].invested += invested;
+      byTargetDate[date].invested += invested;
+      byTargetDate[date].totalTrades += 1;
 
       if (currentPrice && currentPrice > 0) {
         const shares = invested / trade.price;
         const pnl = (currentPrice - trade.price) * shares;
         totalPnl += pnl;
-        byDate[date].pnl += pnl;
+        byTargetDate[date].pnl += pnl;
+        byTargetDate[date].pricedTrades += 1;
       }
     }
 
-    return { totalPnl, totalInvested, byDate };
+    return { totalPnl, totalInvested, byTargetDate };
   }
 
   async getReport(): Promise<string> {
@@ -345,14 +385,14 @@ export class WeatherEngine {
       markdown: true,
       lastScanAt: this.lastScanAt,
       enabled: this.cfg.enabled,
-      allWeatherTrades: this.state.trades,
+      allWeatherTrades: this.activeTrades(),
       weatherPnL: pnlData,
       orders,
     });
   }
 
   recentTrades(n: number): WeatherTradeRecord[] {
-    return this.state.trades.slice(-n).reverse();
+    return this.activeTrades().slice(-n).reverse();
   }
 
   private async notifyTrade(signal: WeatherSignal, rec: WeatherTradeRecord) {
@@ -389,7 +429,12 @@ export class WeatherEngine {
       if (!fs.existsSync(STATE_PATH)) return;
       const parsed = JSON.parse(fs.readFileSync(STATE_PATH, "utf8"));
       this.state = {
-        trades: Array.isArray(parsed?.trades) ? parsed.trades : [],
+        trades: Array.isArray(parsed?.trades)
+          ? parsed.trades.map((trade: WeatherTradeRecord) => ({
+              ...trade,
+              executionMode: tradeExecutionMode(trade),
+            }))
+          : [],
         traded:
           parsed?.traded && typeof parsed.traded === "object"
             ? parsed.traded

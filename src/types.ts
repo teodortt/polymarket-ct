@@ -149,6 +149,7 @@ export interface WeatherSignal {
 // Record of an executed/simulated weather trade.
 export interface WeatherTradeRecord {
   ts: number;
+  executionMode?: "DRY_RUN" | "LIVE";
   eventId: string;
   eventTitle: string;
   city: string;

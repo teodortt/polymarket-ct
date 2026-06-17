@@ -9,7 +9,7 @@ interface ReportOpts {
   weatherPnL?: {
     totalPnl: number;
     totalInvested: number;
-    byDate: Record<string, any>;
+    byTargetDate: Record<string, any>;
   };
   orders?: any[];
 }
@@ -75,7 +75,7 @@ export function formatReport(
         ` | Invested: $${totalInvested.toFixed(2)}${pnlLine}`,
     );
 
-    // Daily breakdown by date (weather trades only) with PNL
+    // Placement activity is grouped by trade date and should stay static.
     const byDate = new Map<string, any[]>();
     for (const trade of opts.allWeatherTrades) {
       const date = new Date(trade.ts).toISOString().slice(0, 10);
@@ -95,20 +95,28 @@ export function formatReport(
         const daySkipped = trades.filter((t) => t.status === "SKIPPED").length;
         const dayFailed = trades.filter((t) => t.status === "FAILED").length;
 
-        // Add P&L for this day if available
-        let dayPnlStr = "";
-        if (opts.weatherPnL && opts.weatherPnL.byDate[date]) {
-          const dayData = opts.weatherPnL.byDate[date];
-          const dayPnl = dayData.pnl;
-          const dayReturnPct =
-            dayData.invested > 0 ? (dayPnl / dayData.invested) * 100 : 0;
-          const dayArrow = dayPnl >= 0 ? "▲" : "▼";
-          dayPnlStr = ` | ${dayArrow} ${dayPnl >= 0 ? "+" : ""}$${dayPnl.toFixed(2)} (${dayPnl >= 0 ? "+" : ""}${dayReturnPct.toFixed(1)}%)`;
-        }
-
         lines.push(
           `  ${date}: ${dayPlaced.length} placed | $${dayInvested.toFixed(2)} invested | ` +
-            `${daySkipped} skipped | ${dayFailed} failed${dayPnlStr}`,
+            `${daySkipped} skipped | ${dayFailed} failed`,
+        );
+      }
+    }
+
+    const targetDateRows = Object.entries(opts.weatherPnL?.byTargetDate ?? {})
+      .sort(([a], [b]) => a.localeCompare(b))
+      .filter(([, dayData]) => dayData?.pricedTrades > 0);
+
+    if (targetDateRows.length > 0) {
+      lines.push(`\n${b("Weather mark-to-market by target date:")}`);
+      for (const [date, dayData] of targetDateRows) {
+        const dayPnl = dayData.pnl;
+        const dayReturnPct =
+          dayData.invested > 0 ? (dayPnl / dayData.invested) * 100 : 0;
+        const dayArrow = dayPnl >= 0 ? "▲" : "▼";
+        lines.push(
+          `  ${date}: ${dayArrow} ${dayPnl >= 0 ? "+" : ""}$${dayPnl.toFixed(2)} ` +
+            `(${dayPnl >= 0 ? "+" : ""}${dayReturnPct.toFixed(1)}%) | ` +
+            `$${dayData.invested.toFixed(2)} invested | ${dayData.pricedTrades}/${dayData.totalTrades} priced`,
         );
       }
     }
