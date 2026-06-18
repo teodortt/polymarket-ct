@@ -53,7 +53,7 @@ const weather: WeatherConfig = {
     .map((s) => s.trim())
     .filter(Boolean),
   // Minimum edge (model probability − price paid) needed to fire a trade.
-  minEdge: parseFloat(process.env.WEATHER_MIN_EDGE || "0.08"),
+  minEdge: parseFloat(process.env.WEATHER_MIN_EDGE || "0.10"),
   // Fractional Kelly. 0.25 = quarter-Kelly (conservative, recommended).
   kellyFraction: parseFloat(process.env.WEATHER_KELLY_FRACTION || "0.25"),
   // Bankroll for Kelly sizing. 0 = auto (dry-run start balance / live USDC).
@@ -70,17 +70,23 @@ const weather: WeatherConfig = {
   // Ignore buys outside this price band (a "0.99 → 1.00" edge isn't tradeable).
   minPrice: parseFloat(process.env.WEATHER_MIN_PRICE || "0.02"),
   maxPrice: parseFloat(process.env.WEATHER_MAX_PRICE || "0.97"),
-  // Skip events resolving within this many hours. Near settlement the realized
-  // high is often already known to the market while the forecast still shows
-  // its pre-day prediction — trading that divergence is a trap, not an edge.
+  // Skip events resolving within this many hours. With `minLeadDays` now
+  // guarding same-day trades, this defaults to 0 so near-settlement events stay
+  // visible — the bias calibrator needs to observe their realized outcome.
   minHoursToResolve: parseFloat(
-    process.env.WEATHER_MIN_HOURS_TO_RESOLVE || "6",
+    process.env.WEATHER_MIN_HOURS_TO_RESOLVE || "0",
   ),
+  // Never trade an event whose measurement day is fewer than this many days
+  // away. Same-day (lead 0) markets are effectively settled — the book already
+  // knows the realized high while the forecast still shows its prior guess.
+  minLeadDays: parseInt(process.env.WEATHER_MIN_LEAD_DAYS || "1"),
   maxTradesPerScan: parseInt(process.env.WEATHER_MAX_TRADES_PER_SCAN || "3"),
   maxTradesPerDay: parseInt(process.env.WEATHER_MAX_TRADES_PER_DAY || "20"),
   // KDE smoothing over ensemble members (°F). Covers integer rounding,
-  // station-vs-grid bias and known ensemble under-dispersion.
-  kdeBandwidthF: parseFloat(process.env.WEATHER_KDE_BANDWIDTH_F || "1.0"),
+  // station-vs-grid bias and known ensemble under-dispersion. Widened from the
+  // original 1.0 — live scans showed true daily-max error of 2–3°C, far beyond
+  // the old σ, which made the model overconfident and manufactured false edges.
+  kdeBandwidthF: parseFloat(process.env.WEATHER_KDE_BANDWIDTH_F || "2.0"),
   kdeLeadPerDayF: parseFloat(process.env.WEATHER_KDE_LEAD_PER_DAY_F || "0.25"),
   // Inflate ensemble spread around its mean (>=1) to improve calibration.
   spreadInflation: parseFloat(process.env.WEATHER_SPREAD_INFLATION || "1.1"),
@@ -97,6 +103,17 @@ const weather: WeatherConfig = {
   ),
   models:
     process.env.WEATHER_MODELS || "gfs_seamless,icon_seamless,ecmwf_ifs025",
+  // A bucket whose Yes price is at/above this is treated as the realized
+  // outcome, used to learn each city's grid-vs-station bias from history.
+  settleYesThreshold: parseFloat(
+    process.env.WEATHER_SETTLE_YES_THRESHOLD || "0.9",
+  ),
+  // EMA weight for each new per-city bias sample (higher = adapts faster).
+  biasEmaAlpha: parseFloat(process.env.WEATHER_BIAS_EMA_ALPHA || "0.35"),
+  // Require this many scored samples before trusting/applying a city's bias.
+  biasMinSamples: parseInt(process.env.WEATHER_BIAS_MIN_SAMPLES || "2"),
+  // Clamp the learned correction so a bad sample can't wildly shift forecasts.
+  maxCityBiasC: parseFloat(process.env.WEATHER_MAX_CITY_BIAS_C || "6"),
 };
 
 export const config = {

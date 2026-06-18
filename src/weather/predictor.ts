@@ -69,20 +69,24 @@ export function predictEvent(
   };
 }
 
-// Best actionable bucket: tradeable price band, accepting orders, enough
-// liquidity, and edge above the configured threshold — ranked by edge.
+// Only the model's single most-likely bucket (its mode) is ever actionable.
+//
+// Ranking by *edge* instead selects the bucket where a noisy/biased forecast
+// most disagrees with a liquid market — i.e. the model's biggest errors — so it
+// systematically bought cheap long-shots that expire worthless. Restricting to
+// the mode means we only bet our genuine best estimate, and only when even that
+// estimate is mispriced enough to clear the gates.
 function pickBest(
   signals: BucketSignal[],
   cfg: WeatherConfig,
 ): BucketSignal | null {
-  let best: BucketSignal | null = null;
-  for (const s of signals) {
-    if (!s.bucket.acceptingOrders) continue;
-    if (s.buyPrice == null) continue;
-    if (s.buyPrice < cfg.minPrice || s.buyPrice > cfg.maxPrice) continue;
-    if (s.bucket.liquidity < cfg.minLiquidityUsdc) continue;
-    if (s.edge < cfg.minEdge) continue;
-    if (best == null || s.edge > best.edge) best = s;
-  }
-  return best;
+  // `signals` is pre-sorted by modelProb desc, so [0] is the mode.
+  const mode = signals[0];
+  if (!mode) return null;
+  if (!mode.bucket.acceptingOrders) return null;
+  if (mode.buyPrice == null) return null;
+  if (mode.buyPrice < cfg.minPrice || mode.buyPrice > cfg.maxPrice) return null;
+  if (mode.bucket.liquidity < cfg.minLiquidityUsdc) return null;
+  if (mode.edge < cfg.minEdge) return null;
+  return mode;
 }

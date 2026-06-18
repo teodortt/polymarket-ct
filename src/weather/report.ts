@@ -197,6 +197,12 @@ export function formatReport(
         `det ${f.det.toFixed(1)}${u} · ens ${f.ensembleMean.toFixed(1)}${u} · σ ${f.sigma.toFixed(1)}${u}`,
       );
     }
+    if (f.biasApplied) {
+      const sign = f.biasApplied > 0 ? "+" : "";
+      lines.push(
+        `bias ${sign}${f.biasApplied.toFixed(1)}${u} (raw centre ${f.rawCenter.toFixed(1)}${u})`,
+      );
+    }
     lines.push(
       `Model top: ${top.bucket.label} ${pct(top.modelProb)}  |  Market top: ${mktTop.bucket.label} ${pct(mktTop.marketProb)}`,
     );

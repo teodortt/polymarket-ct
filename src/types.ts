@@ -61,6 +61,7 @@ export interface WeatherConfig {
   minPrice: number; // ignore buys cheaper than this (avoids 0-edges)
   maxPrice: number; // ignore buys richer than this
   minHoursToResolve: number; // skip events resolving sooner than this
+  minLeadDays: number; // never trade events whose measurement day is < this away
   maxTradesPerScan: number;
   maxTradesPerDay: number;
   kdeBandwidthF: number; // KDE smoothing bandwidth in °F
@@ -69,6 +70,12 @@ export interface WeatherConfig {
   deterministicWeight: number; // 0–1 blend toward the high-res deterministic max
   disagreementSigmaWeight: number; // widen σ by this × |det − ensemble mean|
   models: string; // Open-Meteo ensemble model ids (comma separated)
+  // Per-city bias calibration (learns the grid-forecast → resolution-station
+  // offset from realized outcomes so 1° buckets stop being systematically off).
+  settleYesThreshold: number; // a bucket Yes ≥ this is treated as the realized outcome
+  biasEmaAlpha: number; // EMA weight for each new bias sample (0–1)
+  biasMinSamples: number; // require this many samples before applying a city bias
+  maxCityBiasC: number; // clamp the learned correction to ±this (°C)
 }
 
 export interface GeoPoint {
@@ -124,6 +131,8 @@ export interface ForecastSummary {
   sigma: number; // KDE bandwidth actually used (market unit)
   det: number | null; // deterministic high-res daily max
   ensembleMean: number; // raw (un-anchored) ensemble mean
+  rawCenter: number; // distribution centre BEFORE the per-city bias correction
+  biasApplied: number; // per-city correction folded into the centre (market unit)
 }
 
 // Model-vs-market comparison for a single bucket.

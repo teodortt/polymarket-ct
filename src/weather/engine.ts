@@ -2,7 +2,14 @@ import * as fs from "fs";
 import * as path from "path";
 import axios from "axios";
 import { config } from "../config";
-import { Trade, WeatherSignal, WeatherTradeRecord } from "../types";
+import {
+  TempBucket,
+  TempUnit,
+  Trade,
+  WeatherMarketEvent,
+  WeatherSignal,
+  WeatherTradeRecord,
+} from "../types";
 import { copyTradeWithSize, getLiveUsdcBalance } from "../trader";
 import { resolveCity } from "./geocode";
 import { buildForecastDistribution } from "./forecast";
@@ -12,6 +19,7 @@ import { formatReport } from "./report";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const STATE_PATH = path.join(DATA_DIR, "weather.json");
+const CALIB_PATH = path.join(DATA_DIR, "weatherCalibration.json");
 const TRADES_MAX = 1000;
 const CLOB_API = "https://clob.polymarket.com";
 
@@ -28,6 +36,25 @@ interface WeatherState {
   trades: WeatherTradeRecord[];
   // local-date → token ids already traded that day (dedupe).
   traded: Record<string, string[]>;
+}
+
+interface CityBias {
+  offsetC: number; // learned grid→station correction, in °C
+  samples: number;
+  unit: TempUnit;
+  updatedAt: number;
+}
+
+// Persistent learning store for the per-city bias correction.
+interface CalibrationState {
+  // `${cityKey}|${targetDate}` → latest uncorrected forecast centre.
+  centers: Record<string, { rawCenter: number; unit: TempUnit; at: number }>;
+  // `${cityKey}|${targetDate}` → realized daily-high centre (from settlement).
+  realized: Record<string, { center: number; unit: TempUnit; at: number }>;
+  // keys already folded into a city's bias (so each day counts once).
+  scored: string[];
+  // cityKey → learned bias.
+  bias: Record<string, CityBias>;
 }
 
 interface WeatherPnLByDate {
@@ -52,12 +79,30 @@ function tradeExecutionMode(trade: WeatherTradeRecord): "DRY_RUN" | "LIVE" {
   return trade.status === "DRY_RUN" ? "DRY_RUN" : "LIVE";
 }
 
+function cityKey(city: string): string {
+  return city.trim().toLowerCase();
+}
+
+// Representative realized value for a winning bucket interval (market unit).
+function bucketCenter(lo: number, hi: number): number {
+  if (Number.isFinite(lo) && Number.isFinite(hi)) return (lo + hi) / 2;
+  if (!Number.isFinite(lo) && Number.isFinite(hi)) return hi - 0.5; // "x or below"
+  if (Number.isFinite(lo) && !Number.isFinite(hi)) return lo + 0.5; // "x or higher"
+  return NaN;
+}
+
 export class WeatherEngine {
   private cfg = config.weather;
   private notifier?: WeatherNotifier;
   private dataProviders: WeatherDataProviders = {};
   private running = false;
   private state: WeatherState = { trades: [], traded: {} };
+  private calib: CalibrationState = {
+    centers: {},
+    realized: {},
+    scored: [],
+    bias: {},
+  };
   private lastSignals: WeatherSignal[] = [];
   private lastScanAt = 0;
 
@@ -68,6 +113,7 @@ export class WeatherEngine {
     this.notifier = notifier;
     this.dataProviders = dataProviders ?? {};
     this.loadState();
+    this.loadCalibration();
   }
 
   // ── lifecycle ───────────────────────────────────────────────────────────────
@@ -133,16 +179,19 @@ export class WeatherEngine {
           console.warn(`[Weather] no coordinates for "${event.city}" — skip.`);
           continue;
         }
+        const biasOffset = this.cityBiasOffset(event.city, event.unit);
         const forecast = await buildForecastDistribution(
           geo,
           event.unit,
           event.targetDate,
           this.cfg,
+          biasOffset,
         );
         if (!forecast) continue;
 
         const signal = predictEvent(event, geo, forecast, this.cfg);
         signals.push(signal);
+        this.learnFromEvent(event, signal);
 
         if (
           place &&
@@ -173,7 +222,18 @@ export class WeatherEngine {
     const best = signal.best;
     if (!best || best.buyPrice == null) return false;
 
+    // Never trade essentially-settled, same-day outcomes — the book already
+    // knows the realized high while the forecast still shows its prior guess.
+    if (signal.forecast.leadDays < this.cfg.minLeadDays) return false;
+
     const bucket = best.bucket;
+    // One position per city+date. Buckets are mutually exclusive, so stacking
+    // adjacent ones across scans/days just guarantees losers.
+    if (
+      this.hasOpenPositionForEvent(signal.event.city, signal.event.targetDate)
+    ) {
+      return false;
+    }
     // Already traded this bucket today — don't stack.
     if (this.tradedTokens().includes(bucket.tokenIdYes)) return false;
 
@@ -307,6 +367,132 @@ export class WeatherEngine {
     }
   }
 
+  // ── per-city bias calibration ─────────────────────────────────────────────
+  // Learn the systematic gap between the forecast grid cell and the official
+  // station each market resolves against — from realized outcomes — and correct
+  // future forecasts by it. Without this, 1° buckets stay perpetually off.
+
+  // Learned correction for a city, in the market's unit (0 until trusted).
+  private cityBiasOffset(city: string, unit: TempUnit): number {
+    const entry = this.calib.bias[cityKey(city)];
+    if (!entry || entry.samples < this.cfg.biasMinSamples) return 0;
+    const cap = this.cfg.maxCityBiasC;
+    const offsetC = Math.max(-cap, Math.min(cap, entry.offsetC));
+    return unit === "F" ? offsetC * 1.8 : offsetC; // stored in °C
+  }
+
+  // Record this scan's forecast centre, capture the realized bucket once the
+  // market settles, and fold the (predicted, realized) gap into the city bias.
+  private learnFromEvent(event: WeatherMarketEvent, signal: WeatherSignal) {
+    const key = `${cityKey(event.city)}|${event.targetDate}`;
+
+    // Overwrite with the freshest (lowest-lead) uncorrected centre, so scoring
+    // isolates the representativeness bias rather than lead-time forecast error.
+    this.calib.centers[key] = {
+      rawCenter: signal.forecast.rawCenter,
+      unit: event.unit,
+      at: Date.now(),
+    };
+
+    // Once the market parks a bucket at/above the settle threshold, treat its
+    // centre as the observed daily high.
+    if (!this.calib.realized[key]) {
+      let top: TempBucket | null = null;
+      for (const b of event.buckets) {
+        if (!top || b.yesPrice > top.yesPrice) top = b;
+      }
+      if (top && top.yesPrice >= this.cfg.settleYesThreshold) {
+        const center = bucketCenter(top.lo, top.hi);
+        if (Number.isFinite(center)) {
+          this.calib.realized[key] = {
+            center,
+            unit: event.unit,
+            at: Date.now(),
+          };
+        }
+      }
+    }
+
+    // Fold a completed (predicted, realized) pair into the city's bias once.
+    const c = this.calib.centers[key];
+    const r = this.calib.realized[key];
+    if (c && r && c.unit === r.unit && !this.calib.scored.includes(key)) {
+      const sampleNative = r.center - c.rawCenter;
+      const sampleC = event.unit === "F" ? sampleNative / 1.8 : sampleNative;
+      this.applyBiasSample(event.city, event.unit, sampleC);
+      this.calib.scored.push(key);
+    }
+
+    this.pruneCalibration();
+    this.saveCalibration();
+  }
+
+  private applyBiasSample(city: string, unit: TempUnit, sampleC: number) {
+    const k = cityKey(city);
+    const cur = this.calib.bias[k];
+    const a = Math.min(1, Math.max(0, this.cfg.biasEmaAlpha));
+    let offsetC = cur ? (1 - a) * cur.offsetC + a * sampleC : sampleC;
+    const cap = this.cfg.maxCityBiasC;
+    offsetC = Math.max(-cap, Math.min(cap, offsetC));
+    this.calib.bias[k] = {
+      offsetC,
+      samples: (cur?.samples ?? 0) + 1,
+      unit,
+      updatedAt: Date.now(),
+    };
+  }
+
+  private hasOpenPositionForEvent(city: string, targetDate: string): boolean {
+    const ck = cityKey(city);
+    return this.activeTrades().some(
+      (t) =>
+        cityKey(t.city) === ck &&
+        t.targetDate === targetDate &&
+        (t.status === "PLACED" || t.status === "DRY_RUN"),
+    );
+  }
+
+  private pruneCalibration() {
+    const cutoff = Date.now() - 30 * 86_400_000; // keep ~30 days of day-keys
+    for (const map of [this.calib.centers, this.calib.realized] as const) {
+      for (const k of Object.keys(map)) {
+        if (map[k].at < cutoff) delete map[k];
+      }
+    }
+    this.calib.scored = this.calib.scored.filter(
+      (k) => this.calib.centers[k] || this.calib.realized[k],
+    );
+  }
+
+  private loadCalibration() {
+    try {
+      if (!fs.existsSync(CALIB_PATH)) return;
+      const p = JSON.parse(fs.readFileSync(CALIB_PATH, "utf8"));
+      this.calib = {
+        centers: p?.centers && typeof p.centers === "object" ? p.centers : {},
+        realized:
+          p?.realized && typeof p.realized === "object" ? p.realized : {},
+        scored: Array.isArray(p?.scored) ? p.scored : [],
+        bias: p?.bias && typeof p.bias === "object" ? p.bias : {},
+      };
+      const n = Object.keys(this.calib.bias).length;
+      if (n > 0) {
+        console.log(`[Weather] Restored bias calibration for ${n} city(ies).`);
+      }
+    } catch (err: any) {
+      console.error("[Weather] Failed to load calibration:", err.message);
+    }
+  }
+
+  private saveCalibration() {
+    try {
+      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(CALIB_PATH, JSON.stringify(this.calib, null, 2));
+    } catch (err: any) {
+      console.error("[Weather] Failed to save calibration:", err.message);
+    }
+  }
+
   // ── reporting ─────────────────────────────────────────────────────────────────
   private async calculateWeatherPnL(): Promise<{
     totalPnl: number;
@@ -321,24 +507,42 @@ export class WeatherEngine {
       return { totalPnl: 0, totalInvested: 0, byTargetDate: {} };
     }
 
-    // Fetch current prices for unique tokenIds
+    // Fetch current prices for unique tokenIds.
+    // Prefer SELL side for mark-to-market (liquidation value), then fall back
+    // to BUY side if needed. Run requests in parallel so a slow token does not
+    // starve the whole report and bias pricing coverage.
     const tokenIdPrices: Record<string, number> = {};
     const uniqueTokenIds = [...new Set(openTrades.map((t) => t.tokenId))];
 
-    for (const tokenId of uniqueTokenIds) {
+    const fetchPrice = async (
+      tokenId: string,
+      side: "BUY" | "SELL",
+    ): Promise<number | null> => {
       try {
         const res = await axios.get(`${CLOB_API}/price`, {
-          params: { token_id: tokenId, side: "BUY" },
+          params: { token_id: tokenId, side },
           timeout: 3000,
         });
-        const currentPrice = parseFloat(res.data?.price ?? "0");
-        if (currentPrice > 0) {
-          tokenIdPrices[tokenId] = currentPrice;
-        }
+        const px = parseFloat(res.data?.price ?? "NaN");
+        return Number.isFinite(px) ? px : null;
       } catch {
-        // Skip on error
+        return null;
       }
-    }
+    };
+
+    await Promise.allSettled(
+      uniqueTokenIds.map(async (tokenId) => {
+        const sellPx = await fetchPrice(tokenId, "SELL");
+        if (sellPx != null) {
+          tokenIdPrices[tokenId] = sellPx;
+          return;
+        }
+        const buyPx = await fetchPrice(tokenId, "BUY");
+        if (buyPx != null) {
+          tokenIdPrices[tokenId] = buyPx;
+        }
+      }),
+    );
 
     // Calculate PNL per trade
     let totalPnl = 0;
@@ -362,7 +566,7 @@ export class WeatherEngine {
       byTargetDate[date].invested += invested;
       byTargetDate[date].totalTrades += 1;
 
-      if (currentPrice && currentPrice > 0) {
+      if (Number.isFinite(currentPrice)) {
         const shares = invested / trade.price;
         const pnl = (currentPrice - trade.price) * shares;
         totalPnl += pnl;

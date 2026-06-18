@@ -215,6 +215,7 @@ export async function buildForecastDistribution(
   unit: TempUnit,
   targetDate: string,
   cfg: WeatherConfig,
+  biasOffset = 0,
 ): Promise<{ dist: ForecastDistribution; summary: ForecastSummary } | null> {
   const [fetched, det] = await Promise.all([
     fetchEnsembleMaxes(geo, unit, targetDate, cfg.models),
@@ -229,7 +230,11 @@ export async function buildForecastDistribution(
   // mean, then shift every member so the cloud recentres on that anchor while
   // keeping the ensemble's (flow-dependent) spread and shape.
   const w = det != null ? Math.min(1, Math.max(0, cfg.deterministicWeight)) : 0;
-  const anchor = w * (det ?? ensembleMean) + (1 - w) * ensembleMean;
+  const rawAnchor = w * (det ?? ensembleMean) + (1 - w) * ensembleMean;
+  // Fold in the learned per-city grid→station correction (market unit). Learned
+  // from realized outcomes, this removes the systematic 1–3° offset between the
+  // forecast grid cell and the official station the market resolves against.
+  const anchor = rawAnchor + biasOffset;
   const shift = anchor - ensembleMean;
   const recentered = shift === 0 ? maxes.slice() : maxes.map((x) => x + shift);
 
@@ -267,6 +272,8 @@ export async function buildForecastDistribution(
     sigma,
     det,
     ensembleMean,
+    rawCenter: rawAnchor,
+    biasApplied: biasOffset,
   };
 
   return { dist, summary };
