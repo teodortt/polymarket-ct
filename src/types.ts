@@ -76,6 +76,14 @@ export interface WeatherConfig {
   biasEmaAlpha: number; // EMA weight for each new bias sample (0–1)
   biasMinSamples: number; // require this many samples before applying a city bias
   maxCityBiasC: number; // clamp the learned correction to ±this (°C)
+  // Hard cap on the bankroll fraction risked on a single event, applied on top
+  // of fractional-Kelly sizing (capital-preservation invariant).
+  maxBankrollFractionPerEvent: number; // e.g. 0.05 = never risk >5% on one event
+  // Settlement-lock detector (intraday, obs-grounded). A bucket is a near-arb
+  // only when the realized-high-so-far makes it ≥ lockMinProb certain AND the
+  // ask is still ≤ lockMaxAsk. Used read-only until lockTradingEnabled is true.
+  lockMinProb: number; // conditional P(final high ∈ bucket | obs) to call it locked
+  lockMaxAsk: number; // only a "gap" if the bucket still asks ≤ this
 }
 
 export interface GeoPoint {

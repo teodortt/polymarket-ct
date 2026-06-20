@@ -243,6 +243,9 @@ export class WeatherEngine {
     notional = Math.min(
       notional,
       this.cfg.maxTradeUsdc,
+      // Hard capital-preservation invariant: never risk more than the
+      // configured bankroll fraction on a single event, whatever Kelly says.
+      bankroll * this.cfg.maxBankrollFractionPerEvent,
       bucket.liquidity * this.cfg.maxLiquidityFraction,
     );
     notional = Math.floor(notional * 100) / 100;

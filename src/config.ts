@@ -114,6 +114,14 @@ const weather: WeatherConfig = {
   biasMinSamples: parseInt(process.env.WEATHER_BIAS_MIN_SAMPLES || "2"),
   // Clamp the learned correction so a bad sample can't wildly shift forecasts.
   maxCityBiasC: parseFloat(process.env.WEATHER_MAX_CITY_BIAS_C || "6"),
+  // Hard capital-preservation cap: never stake more than this fraction of the
+  // bankroll on one event, regardless of what Kelly suggests. Default 5%.
+  maxBankrollFractionPerEvent: parseFloat(
+    process.env.WEATHER_MAX_BANKROLL_FRACTION_PER_EVENT || "0.05",
+  ),
+  // Settlement-lock detector thresholds (intraday, obs-grounded near-arb).
+  lockMinProb: parseFloat(process.env.WEATHER_LOCK_MIN_PROB || "0.98"),
+  lockMaxAsk: parseFloat(process.env.WEATHER_LOCK_MAX_ASK || "0.95"),
 };
 
 export const config = {
