@@ -239,6 +239,22 @@ export async function copyTradeWithSize(
     return result;
   }
 
+  // Guard against uncopyable source records. Some activity-feed entries (e.g.
+  // neg-risk conversions/redemptions) carry an outcome but no usable price, so
+  // they normalise to price 0. Placing an order from a non-positive price feeds
+  // the CLOB rounding math a bad amount and crashes deep inside the client with
+  // an opaque "reading 'toString'" error — skip with a clear reason instead.
+  if (!Number.isFinite(trade.price) || trade.price <= 0) {
+    result.status = "SKIPPED";
+    result.reason = `No valid price on source trade (price=${trade.price}) — not copyable`;
+    return result;
+  }
+  if (!trade.tokenId) {
+    result.status = "SKIPPED";
+    result.reason = "Missing tokenId on source trade — not copyable";
+    return result;
+  }
+
   const marketInfo: MarketInfo | null = await getMarketInfo(
     trade.tokenId,
     trade.market,
