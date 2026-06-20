@@ -13,6 +13,7 @@ import {
 import { copyTradeWithSize, getLiveUsdcBalance } from "../trader";
 import { resolveCity } from "./geocode";
 import { buildForecastDistribution } from "./forecast";
+import { fetchStationObs } from "./resolution";
 import { discoverTemperatureEvents } from "./markets";
 import { predictEvent } from "./predictor";
 import { formatReport } from "./report";
@@ -49,8 +50,13 @@ interface CityBias {
 interface CalibrationState {
   // `${cityKey}|${targetDate}` → latest uncorrected forecast centre.
   centers: Record<string, { rawCenter: number; unit: TempUnit; at: number }>;
-  // `${cityKey}|${targetDate}` → realized daily-high centre (from settlement).
-  realized: Record<string, { center: number; unit: TempUnit; at: number }>;
+  // `${cityKey}|${targetDate}` → realized daily-high centre. `source` records
+  // whether it came from official station obs (ground truth) or the market
+  // price proxy (fallback for stations NWS doesn't cover).
+  realized: Record<
+    string,
+    { center: number; unit: TempUnit; at: number; source?: "obs" | "market" }
+  >;
   // keys already folded into a city's bias (so each day counts once).
   scored: string[];
   // cityKey → learned bias.
@@ -191,7 +197,22 @@ export class WeatherEngine {
 
         const signal = predictEvent(event, geo, forecast, this.cfg);
         signals.push(signal);
-        this.learnFromEvent(event, signal);
+
+        // Ground-truth calibration: on the measurement day, read the official
+        // resolution-station obs. Once the day's heating is done the observed
+        // high is effectively the settled daily max — a non-circular realized
+        // value, far better than inferring it from the market's own price.
+        let realized: { obsMax?: number; nwsCovered: boolean } | undefined;
+        if (signal.forecast.leadDays === 0) {
+          const obs = await fetchStationObs(geo, event.unit, event.targetDate);
+          realized = obs
+            ? {
+                nwsCovered: true,
+                obsMax: obs.localHour >= 17 ? obs.obsMaxSoFar : undefined,
+              }
+            : { nwsCovered: false };
+        }
+        this.learnFromEvent(event, signal, realized);
 
         if (
           place &&
@@ -384,9 +405,15 @@ export class WeatherEngine {
     return unit === "F" ? offsetC * 1.8 : offsetC; // stored in °C
   }
 
-  // Record this scan's forecast centre, capture the realized bucket once the
-  // market settles, and fold the (predicted, realized) gap into the city bias.
-  private learnFromEvent(event: WeatherMarketEvent, signal: WeatherSignal) {
+  // Record this scan's forecast centre, capture the realized daily high, and
+  // fold the (predicted, realized) gap into the city bias. The realized high is
+  // taken from official station obs when available (ground truth), falling back
+  // to the market-price proxy only for cities NWS doesn't cover.
+  private learnFromEvent(
+    event: WeatherMarketEvent,
+    signal: WeatherSignal,
+    realized?: { obsMax?: number; nwsCovered: boolean },
+  ) {
     const key = `${cityKey(event.city)}|${event.targetDate}`;
 
     // Overwrite with the freshest (lowest-lead) uncorrected centre, so scoring
@@ -397,21 +424,37 @@ export class WeatherEngine {
       at: Date.now(),
     };
 
-    // Once the market parks a bucket at/above the settle threshold, treat its
-    // centre as the observed daily high.
-    if (!this.calib.realized[key]) {
-      let top: TempBucket | null = null;
-      for (const b of event.buckets) {
-        if (!top || b.yesPrice > top.yesPrice) top = b;
-      }
-      if (top && top.yesPrice >= this.cfg.settleYesThreshold) {
-        const center = bucketCenter(top.lo, top.hi);
-        if (Number.isFinite(center)) {
+    // Realized capture only makes sense on the measurement day itself.
+    if (signal.forecast.leadDays === 0) {
+      if (realized?.obsMax != null && Number.isFinite(realized.obsMax)) {
+        // Ground truth from the resolution station (day's heating done). Always
+        // prefer this; let it upgrade a prior market-proxy estimate.
+        const existing = this.calib.realized[key];
+        if (!existing || existing.source !== "obs") {
           this.calib.realized[key] = {
-            center,
+            center: realized.obsMax,
             unit: event.unit,
             at: Date.now(),
+            source: "obs",
           };
+        }
+      } else if (!realized?.nwsCovered && !this.calib.realized[key]) {
+        // Fallback for non-NWS stations: once the market parks a bucket at/above
+        // the settle threshold, treat its centre as the observed daily high.
+        let top: TempBucket | null = null;
+        for (const b of event.buckets) {
+          if (!top || b.yesPrice > top.yesPrice) top = b;
+        }
+        if (top && top.yesPrice >= this.cfg.settleYesThreshold) {
+          const center = bucketCenter(top.lo, top.hi);
+          if (Number.isFinite(center)) {
+            this.calib.realized[key] = {
+              center,
+              unit: event.unit,
+              at: Date.now(),
+              source: "market",
+            };
+          }
         }
       }
     }
@@ -424,6 +467,11 @@ export class WeatherEngine {
       const sampleC = event.unit === "F" ? sampleNative / 1.8 : sampleNative;
       this.applyBiasSample(event.city, event.unit, sampleC);
       this.calib.scored.push(key);
+      console.log(
+        `[Weather] calib ${event.city} ${event.targetDate}: realized ` +
+          `${r.center.toFixed(1)}°${event.unit} (${r.source ?? "?"}) vs forecast ` +
+          `${c.rawCenter.toFixed(1)}°${event.unit} → bias sample ${sampleC.toFixed(2)}°C`,
+      );
     }
 
     this.pruneCalibration();

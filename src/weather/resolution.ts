@@ -90,37 +90,69 @@ export function heatingHoursLeft(localHour: number): number {
  * reduce them to the running daily maximum. Returns null for non-U.S. stations
  * or any API failure (caller should fall back to the forecast path).
  */
+interface StationRef {
+  stationId: string;
+  timeZone: string;
+}
+
+// Cache the point→station/tz resolution (it never changes) so repeated intraday
+// polling costs one observations call instead of three NWS round-trips. Misses
+// (non-U.S. 404s) are cached too; transient errors are not, so they retry.
+const stationCache = new Map<string, StationRef | null>();
+
+async function resolveStation(geo: GeoPoint): Promise<StationRef | null> {
+  const key = `${geo.lat.toFixed(4)},${geo.lon.toFixed(4)}`;
+  if (stationCache.has(key)) return stationCache.get(key) ?? null;
+  try {
+    const pts = await axios.get(`${NWS_API}/points/${key}`, {
+      headers: NWS_HEADERS,
+      timeout: 15_000,
+    });
+    const stationsUrl: string | undefined =
+      pts.data?.properties?.observationStations;
+    const timeZone: string =
+      pts.data?.properties?.timeZone || geo.timezone || "UTC";
+    if (!stationsUrl) {
+      stationCache.set(key, null); // point has no NWS coverage
+      return null;
+    }
+    const stationsRes = await axios.get(stationsUrl, {
+      headers: NWS_HEADERS,
+      timeout: 15_000,
+    });
+    const stationId: string | undefined =
+      stationsRes.data?.features?.[0]?.properties?.stationIdentifier;
+    if (!stationId) {
+      stationCache.set(key, null);
+      return null;
+    }
+    const ref: StationRef = { stationId, timeZone };
+    stationCache.set(key, ref);
+    return ref;
+  } catch (err: any) {
+    if (err?.response?.status === 404) {
+      stationCache.set(key, null); // non-U.S. point — cache the miss
+    } else {
+      console.error(
+        `[Weather] NWS station resolve failed for ${geo.name}: ${err.message}`,
+      );
+    }
+    return null;
+  }
+}
+
 export async function fetchStationObs(
   geo: GeoPoint,
   unit: TempUnit,
   targetDate: string,
 ): Promise<StationObs | null> {
+  const ref = await resolveStation(geo);
+  if (!ref) return null;
   try {
-    // 1. Resolve the grid point → its observation-station list + local tz.
-    const pts = await axios.get(
-      `${NWS_API}/points/${geo.lat.toFixed(4)},${geo.lon.toFixed(4)}`,
-      { headers: NWS_HEADERS, timeout: 15_000 },
-    );
-    const stationsUrl: string | undefined =
-      pts.data?.properties?.observationStations;
-    const timeZone: string =
-      pts.data?.properties?.timeZone || geo.timezone || "UTC";
-    if (!stationsUrl) return null; // non-U.S. point — no NWS coverage
-
-    // 2. First listed station is the primary reporting station for the point.
-    const stationsRes = await axios.get(stationsUrl, {
-      headers: NWS_HEADERS,
-      timeout: 15_000,
-    });
-    const station = stationsRes.data?.features?.[0];
-    const stationId: string | undefined =
-      station?.properties?.stationIdentifier;
-    if (!stationId) return null;
-
-    // 3. Pull observations from the start of the target local day to now.
+    // Pull observations from the start of the target local day to now.
     const start = `${targetDate}T00:00:00+00:00`;
     const obsRes = await axios.get(
-      `${NWS_API}/stations/${stationId}/observations`,
+      `${NWS_API}/stations/${ref.stationId}/observations`,
       {
         headers: NWS_HEADERS,
         params: { start, limit: 250 },
@@ -136,18 +168,18 @@ export async function fetchStationObs(
       const tempC = f?.properties?.temperature?.value;
       if (!ts || tempC == null || !Number.isFinite(tempC)) continue;
       // Only readings whose LOCAL date is the market's measurement day count.
-      if (partsInTz(new Date(ts), timeZone).date !== targetDate) continue;
+      if (partsInTz(new Date(ts), ref.timeZone).date !== targetDate) continue;
       readings++;
       if (tempC > maxC) maxC = tempC;
     }
     if (!Number.isFinite(maxC) || readings === 0) return null;
 
     const now = new Date();
-    const { hour: localHour } = partsInTz(now, timeZone);
+    const { hour: localHour } = partsInTz(now, ref.timeZone);
 
     return {
-      stationId,
-      timeZone,
+      stationId: ref.stationId,
+      timeZone: ref.timeZone,
       unit,
       obsMaxSoFar: cToUnit(maxC, unit),
       readings,
@@ -156,7 +188,6 @@ export async function fetchStationObs(
       asOf: now.getTime(),
     };
   } catch (err: any) {
-    // 404 = point outside NWS coverage (non-U.S.); anything else = transient.
     if (err?.response?.status && err.response.status !== 404) {
       console.error(
         `[Weather] NWS obs failed for ${geo.name} ${targetDate}: ${err.message}`,
