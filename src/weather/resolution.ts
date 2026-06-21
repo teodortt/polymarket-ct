@@ -54,7 +54,7 @@ interface TzParts {
 }
 
 // Decompose an instant into (local date, fractional local hour) for a tz.
-function partsInTz(d: Date, tz: string): TzParts {
+export function partsInTz(d: Date, tz: string): TzParts {
   const fmt = new Intl.DateTimeFormat("en-CA", {
     timeZone: tz,
     year: "numeric",
@@ -75,7 +75,7 @@ function partsInTz(d: Date, tz: string): TzParts {
   };
 }
 
-function cToUnit(celsius: number, unit: TempUnit): number {
+export function cToUnit(celsius: number, unit: TempUnit): number {
   return unit === "F" ? celsius * 1.8 + 32 : celsius;
 }
 

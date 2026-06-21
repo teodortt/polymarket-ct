@@ -10,7 +10,8 @@
     "watch": "ts-node-dev --respawn src/index.ts",
     "test:copy-one": "node scripts/testCopyOne.js",
     "weather:scan": "ts-node src/weather/cli.ts",
-    "weather:obs": "ts-node src/weather/obsCli.ts"
+    "weather:obs": "ts-node src/weather/obsCli.ts",
+    "weather:backtest": "ts-node src/weather/backtestCli.ts"
   },
   "dependencies": {
     "@polymarket/clob-client-v2": "^1.0.6",

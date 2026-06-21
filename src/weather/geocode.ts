@@ -67,6 +67,13 @@ function normalize(raw: string): string {
   return raw.toLowerCase().replace(/[.?!]/g, "").replace(/\s+/g, " ").trim();
 }
 
+// Canonical keys of the built-in, station-aligned city table. Used as the
+// default universe for tools (e.g. the backtest harness) when no explicit
+// WEATHER_CITIES filter is set.
+export function knownCities(): string[] {
+  return Object.keys(CITY_COORDS);
+}
+
 const cache = new Map<string, GeoPoint | null>();
 
 // Resolve a city token from a market title to coordinates. Tries the built-in

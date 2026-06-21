@@ -3,6 +3,7 @@ import { setupProxy, verifyProxy } from "../proxy";
 import { discoverTemperatureEvents } from "./markets";
 import { resolveCity } from "./geocode";
 import { fetchStationObs, lockProbability } from "./resolution";
+import { fetchMetarObs } from "./metar";
 
 // Read-only settlement-lock scanner. For each near-term temperature event it
 // pulls the OFFICIAL NWS resolution-station observations, computes the
@@ -38,17 +39,25 @@ async function main() {
       continue;
     }
 
-    const obs = await fetchStationObs(geo, event.unit, event.targetDate);
+    // U.S. cities → authoritative NWS station. Everything else → best-effort
+    // global METAR station. This read-only view is exactly where we verify that
+    // the mapped METAR station agrees with how the market actually resolves.
+    let obs = await fetchStationObs(geo, event.unit, event.targetDate);
+    let source = "NWS";
+    if (!obs) {
+      obs = await fetchMetarObs(event.city, event.unit, event.targetDate);
+      source = "METAR";
+    }
     if (!obs) {
       console.log(
-        `• ${event.city} ${event.targetDate} — no NWS obs yet ` +
-          `(non-U.S. station or future day), skip`,
+        `• ${event.city} ${event.targetDate} — no station obs yet ` +
+          `(unmapped city or future day), skip`,
       );
       continue;
     }
 
     console.log(
-      `\n=== ${event.city} ${event.targetDate} — station ${obs.stationId} ===`,
+      `\n=== ${event.city} ${event.targetDate} — ${source} station ${obs.stationId} ===`,
     );
     console.log(
       `   realized high so far: ${obs.obsMaxSoFar.toFixed(1)}${u(event.unit)} ` +
@@ -84,9 +93,13 @@ async function main() {
         // Lock detected but no edge: either already ~100¢ or no real ask resting.
         flag = "  🔒 locked (no tradeable gap)";
       }
+      const here =
+        obs.obsMaxSoFar >= r.bucket.lo && obs.obsMaxSoFar < r.bucket.hi
+          ? "  ← realized high so far"
+          : "";
       console.log(
         `   ${r.bucket.label.padEnd(14)} ` +
-          `lock ${(r.p * 100).toFixed(1).padStart(5)}%  ask ${askStr.padStart(5)}${flag}`,
+          `lock ${(r.p * 100).toFixed(1).padStart(5)}%  ask ${askStr.padStart(5)}${flag}${here}`,
       );
     }
   }

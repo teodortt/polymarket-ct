@@ -9,11 +9,17 @@ import {
   WeatherMarketEvent,
   WeatherSignal,
   WeatherTradeRecord,
+  GeoPoint,
 } from "../types";
 import { copyTradeWithSize, getLiveUsdcBalance } from "../trader";
 import { resolveCity } from "./geocode";
-import { buildForecastDistribution } from "./forecast";
+import { buildForecastDistribution, leadDaysUntil } from "./forecast";
 import { fetchStationObs } from "./resolution";
+import {
+  BacktestStore,
+  loadBacktestStore,
+  measuredErrorSigmaC,
+} from "./backtest";
 import { discoverTemperatureEvents } from "./markets";
 import { predictEvent } from "./predictor";
 import { formatReport } from "./report";
@@ -21,6 +27,7 @@ import { formatReport } from "./report";
 const DATA_DIR = path.join(process.cwd(), "data");
 const STATE_PATH = path.join(DATA_DIR, "weather.json");
 const CALIB_PATH = path.join(DATA_DIR, "weatherCalibration.json");
+const BACKTEST_PATH = path.join(DATA_DIR, "weatherBacktest.json");
 const TRADES_MAX = 1000;
 const CLOB_API = "https://clob.polymarket.com";
 
@@ -111,6 +118,9 @@ export class WeatherEngine {
   };
   private lastSignals: WeatherSignal[] = [];
   private lastScanAt = 0;
+  // Measured per-(city, lead) forecast-error σ, read from data/weatherBacktest.json
+  // (produced by `npm run weather:backtest`). Used as a floor on forecast width.
+  private backtest: BacktestStore | null = null;
 
   constructor(
     notifier?: WeatherNotifier,
@@ -120,6 +130,7 @@ export class WeatherEngine {
     this.dataProviders = dataProviders ?? {};
     this.loadState();
     this.loadCalibration();
+    this.loadBacktest();
   }
 
   // ── lifecycle ───────────────────────────────────────────────────────────────
@@ -186,12 +197,18 @@ export class WeatherEngine {
           continue;
         }
         const biasOffset = this.cityBiasOffset(event.city, event.unit);
+        const sigmaFloor = this.measuredSigmaFloor(
+          geo,
+          event.unit,
+          leadDaysUntil(event.targetDate),
+        );
         const forecast = await buildForecastDistribution(
           geo,
           event.unit,
           event.targetDate,
           this.cfg,
           biasOffset,
+          sigmaFloor,
         );
         if (!forecast) continue;
 
@@ -405,6 +422,26 @@ export class WeatherEngine {
     return unit === "F" ? offsetC * 1.8 : offsetC; // stored in °C
   }
 
+  // Empirically-measured forecast-error σ (backtest harness) for this location
+  // and lead, converted to the market unit. Returned as a floor the forecast
+  // builder uses to widen an overconfident distribution. Undefined (no floor)
+  // when disabled or there is not enough measured history.
+  private measuredSigmaFloor(
+    geo: GeoPoint,
+    unit: TempUnit,
+    leadDays: number,
+  ): number | undefined {
+    if (!this.cfg.backtestSigmaFloor) return undefined;
+    const sigmaC = measuredErrorSigmaC(
+      this.backtest,
+      geo,
+      leadDays,
+      this.cfg.backtestMinSamples,
+    );
+    if (sigmaC == null) return undefined;
+    return unit === "F" ? sigmaC * 1.8 : sigmaC; // stored in °C
+  }
+
   // Record this scan's forecast centre, capture the realized daily high, and
   // fold the (predicted, realized) gap into the city bias. The realized high is
   // taken from official station obs when available (ground truth), falling back
@@ -532,6 +569,18 @@ export class WeatherEngine {
       }
     } catch (err: any) {
       console.error("[Weather] Failed to load calibration:", err.message);
+    }
+  }
+
+  private loadBacktest() {
+    this.backtest = loadBacktestStore(BACKTEST_PATH);
+    if (this.backtest && this.cfg.backtestSigmaFloor) {
+      const n = Object.keys(this.backtest.cities).length;
+      if (n > 0) {
+        console.log(
+          `[Weather] Loaded forecast-error σ floor for ${n} location(s).`,
+        );
+      }
     }
   }
 

@@ -122,6 +122,15 @@ const weather: WeatherConfig = {
   // Settlement-lock detector thresholds (intraday, obs-grounded near-arb).
   lockMinProb: parseFloat(process.env.WEATHER_LOCK_MIN_PROB || "0.98"),
   lockMaxAsk: parseFloat(process.env.WEATHER_LOCK_MAX_ASK || "0.95"),
+  // Use the measured per-(city, lead) forecast-error σ from data/weatherBacktest.json
+  // (produced by `npm run weather:backtest`) as a floor on the predictive
+  // distribution width — kills the overconfidence that manufactured false edges.
+  // Safe no-op when the file is absent. Default on.
+  backtestSigmaFloor: process.env.WEATHER_BACKTEST_SIGMA_FLOOR !== "false",
+  // Require at least this many scored days for a measured σ before trusting it.
+  backtestMinSamples: parseInt(
+    process.env.WEATHER_BACKTEST_MIN_SAMPLES || "20",
+  ),
 };
 
 export const config = {

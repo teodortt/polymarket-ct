@@ -78,7 +78,7 @@ function quantile(sorted: number[], q: number): number {
   return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
 }
 
-function leadDaysUntil(targetDate: string): number {
+export function leadDaysUntil(targetDate: string): number {
   const today = new Date().toISOString().slice(0, 10);
   const ms =
     Date.parse(targetDate + "T00:00:00Z") - Date.parse(today + "T00:00:00Z");
@@ -216,6 +216,7 @@ export async function buildForecastDistribution(
   targetDate: string,
   cfg: WeatherConfig,
   biasOffset = 0,
+  errorSigmaFloor?: number,
 ): Promise<{ dist: ForecastDistribution; summary: ForecastSummary } | null> {
   const [fetched, det] = await Promise.all([
     fetchEnsembleMaxes(geo, unit, targetDate, cfg.models),
@@ -246,17 +247,36 @@ export async function buildForecastDistribution(
   // fold it into the bandwidth so divergent forecasts produce flatter, less
   // confident bucket probabilities (fewer false edges).
   const disagreement = det != null ? Math.abs(det - ensembleMean) : 0;
-  const sigma = Math.sqrt(
+  let sigma = Math.sqrt(
     baseSigma * baseSigma + (cfg.disagreementSigmaWeight * disagreement) ** 2,
   );
-
-  const dist = new ForecastDistribution(recentered, sigma, cfg.spreadInflation);
 
   const sorted = recentered.slice().sort((a, b) => a - b);
   const mean = recentered.reduce((s, v) => s + v, 0) / recentered.length;
   const variance =
     recentered.reduce((s, v) => s + (v - mean) * (v - mean), 0) /
     recentered.length;
+
+  // Measured-σ floor (capital preservation against overconfidence). The KDE's
+  // predictive spread is a mixture: total variance ≈ memberSpread² + kernel²,
+  // where the member spread is inflated exactly as the distribution will inflate
+  // it. If the empirically observed forecast-error σ (from the backtest harness)
+  // is wider than that, raise the kernel σ so the predictive distribution is at
+  // least that wide. It only ever widens — never narrows a model that is already
+  // appropriately uncertain (e.g. from disagreement or long lead).
+  if (
+    errorSigmaFloor != null &&
+    Number.isFinite(errorSigmaFloor) &&
+    errorSigmaFloor > 0
+  ) {
+    const effSpread = Math.max(1, cfg.spreadInflation) * Math.sqrt(variance);
+    const neededKernel = Math.sqrt(
+      Math.max(0, errorSigmaFloor * errorSigmaFloor - effSpread * effSpread),
+    );
+    if (neededKernel > sigma) sigma = neededKernel;
+  }
+
+  const dist = new ForecastDistribution(recentered, sigma, cfg.spreadInflation);
 
   const summary: ForecastSummary = {
     members: recentered.length,

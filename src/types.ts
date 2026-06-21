@@ -84,6 +84,11 @@ export interface WeatherConfig {
   // ask is still ≤ lockMaxAsk. Used read-only until lockTradingEnabled is true.
   lockMinProb: number; // conditional P(final high ∈ bucket | obs) to call it locked
   lockMaxAsk: number; // only a "gap" if the bucket still asks ≤ this
+  // Measured-σ floor: widen the predictive distribution to at least the
+  // empirically observed forecast-error σ (per city + lead) recorded by the
+  // backtest harness. Prevents overconfident, phantom-edge forecasts.
+  backtestSigmaFloor: boolean; // apply the measured σ floor when data is present
+  backtestMinSamples: number; // min scored days before a measured σ is trusted
 }
 
 export interface GeoPoint {
