@@ -855,7 +855,7 @@ export class TelegramBot {
       if (parts.length < 3) {
         this.replyTo(
           ctx,
-          "Usage:\n/exitcfg\n/exitcfg WEATHER_EXIT_ENABLED true\n/exitcfg WEATHER_EXIT_PROFIT_TARGET 0.60",
+          "Usage:\n/exitcfg\n/exitcfg WEATHER_EXIT_ENABLED true\n/exitcfg WEATHER_EXIT_PROFIT_TARGET 0.60\n/exitcfg WEATHER_EXIT_TREND_DROP_FROM_PEAK 0.08",
         );
         return;
       }
@@ -1828,6 +1828,9 @@ export class TelegramBot {
       `WEATHER_EXIT_STOP_LOSS=\`${w.exitStopLoss}\`\n` +
       `WEATHER_EXIT_MIN_HOURS_HELD=\`${w.exitMinHoursHeld}\`\n` +
       `WEATHER_EXIT_SCAN_INTERVAL_MS=\`${w.exitScanIntervalMs}\`\n\n` +
+      `WEATHER_EXIT_TREND_ENABLED=\`${w.exitTrendEnabled}\`\n` +
+      `WEATHER_EXIT_TREND_DROP_FROM_PEAK=\`${w.exitTrendDropFromPeak}\`\n` +
+      `WEATHER_EXIT_TREND_MIN_PROFIT=\`${w.exitTrendMinProfit}\`\n\n` +
       `_Runtime only: values are not persisted to .env automatically._\n` +
       `Usage:\n` +
       `/exit on|off\n` +
@@ -1915,10 +1918,49 @@ export class TelegramBot {
         w.exitScanIntervalMs = n;
         return { ok: true, msg: `WEATHER_EXIT_SCAN_INTERVAL_MS=${n}ms` };
       }
+      case "EXIT_TREND_ENABLED": {
+        const b = parseBool(valueRaw);
+        if (b === undefined) {
+          return {
+            ok: false,
+            msg: "Invalid boolean. Use true/false or on/off.",
+          };
+        }
+        w.exitTrendEnabled = b;
+        return { ok: true, msg: `WEATHER_EXIT_TREND_ENABLED=${b}` };
+      }
+      case "EXIT_TREND_DROP_FROM_PEAK": {
+        const n = parseNum();
+        if (n == null || n < 0 || n > 1) {
+          return {
+            ok: false,
+            msg: "WEATHER_EXIT_TREND_DROP_FROM_PEAK must be between 0 and 1 (as a fraction).",
+          };
+        }
+        w.exitTrendDropFromPeak = n;
+        return {
+          ok: true,
+          msg: `WEATHER_EXIT_TREND_DROP_FROM_PEAK=${(n * 100).toFixed(1)}%`,
+        };
+      }
+      case "EXIT_TREND_MIN_PROFIT": {
+        const n = parseNum();
+        if (n == null || n < 0 || n > 10) {
+          return {
+            ok: false,
+            msg: "WEATHER_EXIT_TREND_MIN_PROFIT must be between 0 and 10 (as a fraction).",
+          };
+        }
+        w.exitTrendMinProfit = n;
+        return {
+          ok: true,
+          msg: `WEATHER_EXIT_TREND_MIN_PROFIT=${(n * 100).toFixed(1)}%`,
+        };
+      }
       default:
         return {
           ok: false,
-          msg: "Unsupported key. Use one of: EXIT_ENABLED, EXIT_PROFIT_TARGET, EXIT_STOP_LOSS, EXIT_MIN_HOURS_HELD, EXIT_SCAN_INTERVAL_MS.",
+          msg: "Unsupported key. Use one of: EXIT_ENABLED, EXIT_PROFIT_TARGET, EXIT_STOP_LOSS, EXIT_MIN_HOURS_HELD, EXIT_SCAN_INTERVAL_MS, EXIT_TREND_ENABLED, EXIT_TREND_DROP_FROM_PEAK, EXIT_TREND_MIN_PROFIT.",
         };
     }
   }

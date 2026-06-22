@@ -44,6 +44,14 @@ interface WeatherState {
   trades: WeatherTradeRecord[];
   // local-date → token ids already traded that day (dedupe).
   traded: Record<string, string[]>;
+  // per-position runtime state for trend-based exits
+  exitTrend: Record<string, ExitTrendState>;
+}
+
+interface ExitTrendState {
+  peakPnlFraction: number;
+  lastPnlFraction: number;
+  updatedAt: number;
 }
 
 interface CityBias {
@@ -109,7 +117,7 @@ export class WeatherEngine {
   private notifier?: WeatherNotifier;
   private dataProviders: WeatherDataProviders = {};
   private running = false;
-  private state: WeatherState = { trades: [], traded: {} };
+  private state: WeatherState = { trades: [], traded: {}, exitTrend: {} };
   private calib: CalibrationState = {
     centers: {},
     realized: {},
@@ -364,6 +372,8 @@ export class WeatherEngine {
     const openPositions = this.getOpenPositions();
     if (openPositions.length === 0) return;
 
+    this.pruneExitTrend(openPositions);
+
     console.log(
       `[Weather] Scanning ${openPositions.length} open position(s) for exits...`,
     );
@@ -459,8 +469,34 @@ export class WeatherEngine {
       };
     }
 
-    // Check profit target
-    if (pnlFraction >= this.cfg.exitProfitTarget) {
+    // Trend-exit: if a profitable position drops far enough from its own
+    // observed peak P&L, close it early (independent of fixed stop/profit).
+    if (this.cfg.exitTrendEnabled) {
+      const trend = this.updateExitTrendState(buyTrade, pnlFraction);
+      const dropFromPeak = trend.peakPnlFraction - pnlFraction;
+      if (
+        trend.peakPnlFraction >= this.cfg.exitTrendMinProfit &&
+        pnlFraction > 0 &&
+        dropFromPeak >= this.cfg.exitTrendDropFromPeak
+      ) {
+        return {
+          pnlFraction,
+          exitPrice,
+          shouldExit: true,
+          reason:
+            `Trend down from peak: peak ${(trend.peakPnlFraction * 100).toFixed(1)}% ` +
+            `→ now ${(pnlFraction * 100).toFixed(1)}% ` +
+            `(drop ${(dropFromPeak * 100).toFixed(1)}%)`,
+        };
+      }
+    }
+
+    // In trend-exit mode we let winners run and only protect gains via
+    // drawdown-from-peak, so the fixed take-profit does not force an early cap.
+    if (
+      !this.cfg.exitTrendEnabled &&
+      pnlFraction >= this.cfg.exitProfitTarget
+    ) {
       return {
         pnlFraction,
         exitPrice,
@@ -564,7 +600,49 @@ export class WeatherEngine {
     };
     this.recordTrade(rec);
 
+    if (result.status === "PLACED" || result.status === "DRY_RUN") {
+      delete this.state.exitTrend[this.positionKey(buyTrade)];
+      this.saveState();
+    }
+
     await this.notifyExit(buyTrade, rec);
+  }
+
+  private positionKey(buyTrade: WeatherTradeRecord): string {
+    return buyTrade.orderId
+      ? `order:${buyTrade.orderId}`
+      : `${buyTrade.tokenId}:${buyTrade.ts}:${buyTrade.price}:${buyTrade.sizeUsdc}`;
+  }
+
+  private updateExitTrendState(
+    buyTrade: WeatherTradeRecord,
+    pnlFraction: number,
+  ): ExitTrendState {
+    const key = this.positionKey(buyTrade);
+    const cur = this.state.exitTrend[key];
+    const peakPnlFraction = cur
+      ? Math.max(cur.peakPnlFraction, pnlFraction)
+      : pnlFraction;
+    const next: ExitTrendState = {
+      peakPnlFraction,
+      lastPnlFraction: pnlFraction,
+      updatedAt: Date.now(),
+    };
+    this.state.exitTrend[key] = next;
+    this.saveState();
+    return next;
+  }
+
+  private pruneExitTrend(openPositions: WeatherTradeRecord[]) {
+    const openKeys = new Set(openPositions.map((p) => this.positionKey(p)));
+    let changed = false;
+    for (const key of Object.keys(this.state.exitTrend)) {
+      if (!openKeys.has(key)) {
+        delete this.state.exitTrend[key];
+        changed = true;
+      }
+    }
+    if (changed) this.saveState();
   }
 
   // ── bankroll / accounting ─────────────────────────────────────────────────────
@@ -998,6 +1076,10 @@ export class WeatherEngine {
         traded:
           parsed?.traded && typeof parsed.traded === "object"
             ? parsed.traded
+            : {},
+        exitTrend:
+          parsed?.exitTrend && typeof parsed.exitTrend === "object"
+            ? parsed.exitTrend
             : {},
       };
       console.log(

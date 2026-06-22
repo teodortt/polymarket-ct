@@ -145,6 +145,15 @@ const weather: WeatherConfig = {
   exitScanIntervalMs: parseInt(
     process.env.WEATHER_EXIT_SCAN_INTERVAL_MS || "60000",
   ),
+  // Trend-based protective exit: after a position gets into profit, close it
+  // if current P&L drops enough from its observed peak.
+  exitTrendEnabled: process.env.WEATHER_EXIT_TREND_ENABLED === "true",
+  exitTrendDropFromPeak: parseFloat(
+    process.env.WEATHER_EXIT_TREND_DROP_FROM_PEAK || "0.08",
+  ),
+  exitTrendMinProfit: parseFloat(
+    process.env.WEATHER_EXIT_TREND_MIN_PROFIT || "0.05",
+  ),
 };
 
 export const config = {

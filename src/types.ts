@@ -95,6 +95,11 @@ export interface WeatherConfig {
   exitStopLoss: number; // exit with <=this loss fraction (e.g. -0.30 = 30% loss)
   exitMinHoursHeld: number; // min hours to hold before exiting (e.g. 1, 6, 24)
   exitScanIntervalMs: number; // how often to check for exit opportunities
+  // Trend-based protective exit for profitable positions: once a position is
+  // in profit, close it if P&L falls enough from its observed peak.
+  exitTrendEnabled: boolean;
+  exitTrendDropFromPeak: number; // e.g. 0.08 = close after 8% drop from peak P&L
+  exitTrendMinProfit: number; // only apply trend-exit once P&L reached this level
 }
 
 export interface GeoPoint {
