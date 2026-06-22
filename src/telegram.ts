@@ -335,6 +335,11 @@ export class TelegramBot {
   // Optional provider for the weather module's report (injected from index.ts
   // when WEATHER_ENABLED). Left undefined keeps /weather a graceful no-op.
   private weatherReport?: () => string | Promise<string>;
+  // Optional reference to the weather engine (for exit commands).
+  private weatherEngine?: {
+    getOpenPositions(): any[];
+    maybeExitPosition(pos: any): Promise<void>;
+  };
 
   constructor() {
     this.bot = new Telegraf(config.telegramBotToken);
@@ -370,6 +375,14 @@ export class TelegramBot {
   // Inject the weather module's report renderer (optional subsystem).
   setWeatherReportProvider(fn: () => string | Promise<string>) {
     this.weatherReport = fn;
+  }
+
+  // Inject the weather engine (for exit commands).
+  setWeatherEngine(engine: {
+    getOpenPositions(): any[];
+    maybeExitPosition(pos: any): Promise<void>;
+  }) {
+    this.weatherEngine = engine;
   }
 
   private allowed(ctx: Context): boolean {
@@ -784,6 +797,76 @@ export class TelegramBot {
       if (!this.allowed(ctx)) return;
       ctx.answerCbQuery().catch(() => {});
       this.handleWeather(ctx);
+    });
+
+    // Exit commands
+    b.command("exit", (ctx) => {
+      if (!this.allowed(ctx)) return;
+      const arg = ctx.message.text.split(" ")[1]?.trim();
+      if (arg) {
+        const enabled = parseBool(arg);
+        if (enabled !== undefined) {
+          config.weather.exitEnabled = enabled;
+          this.replyTo(ctx, `✅ WEATHER_EXIT_ENABLED set to *${enabled}*`);
+          return;
+        }
+      }
+      this.replyTo(ctx, "Usage: /exit on|off");
+    });
+
+    b.command("exitall", (ctx) => {
+      if (!this.allowed(ctx)) return;
+      if (!this.weatherEngine) {
+        this.replyTo(ctx, "❌ Weather engine not initialized.");
+        return;
+      }
+      const positions = this.weatherEngine.getOpenPositions();
+      if (positions.length === 0) {
+        this.replyTo(ctx, "ℹ️ No open positions to close.");
+        return;
+      }
+      this.replyTo(ctx, `⏳ Liquidating ${positions.length} position(s)...`);
+      (async () => {
+        let closed = 0;
+        for (const pos of positions) {
+          try {
+            await this.weatherEngine!.maybeExitPosition(pos);
+            closed++;
+          } catch (err: any) {
+            console.error(`Failed to exit ${pos.tokenId}:`, err?.message);
+          }
+        }
+        this.replyTo(
+          ctx,
+          `✅ Closed ${closed}/${positions.length} position(s).`,
+        );
+      })().catch((err) => {
+        this.replyTo(ctx, `❌ Exit failed: ${err?.message ?? err}`);
+      });
+    });
+
+    b.command("exitcfg", (ctx) => {
+      if (!this.allowed(ctx)) return;
+      const parts = ctx.message.text.trim().split(/\s+/);
+      if (parts.length === 1) {
+        this.replyTo(ctx, this.exitConfigSummary());
+        return;
+      }
+      if (parts.length < 3) {
+        this.replyTo(
+          ctx,
+          "Usage:\n/exitcfg\n/exitcfg WEATHER_EXIT_ENABLED true\n/exitcfg WEATHER_EXIT_PROFIT_TARGET 0.60",
+        );
+        return;
+      }
+      const key = parts[1];
+      const value = parts.slice(2).join(" ");
+      const res = this.applyExitConfig(key, value);
+      if (!res.ok) {
+        this.replyTo(ctx, `❌ ${res.msg}`);
+        return;
+      }
+      this.replyTo(ctx, `✅ ${res.msg}`);
     });
 
     // Settings
@@ -1736,6 +1819,110 @@ export class TelegramBot {
     }
   }
 
+  private exitConfigSummary(): string {
+    const w = config.weather;
+    return (
+      `🚪 *Weather exit config*\n\n` +
+      `WEATHER_EXIT_ENABLED=\`${w.exitEnabled}\`\n` +
+      `WEATHER_EXIT_PROFIT_TARGET=\`${w.exitProfitTarget}\`\n` +
+      `WEATHER_EXIT_STOP_LOSS=\`${w.exitStopLoss}\`\n` +
+      `WEATHER_EXIT_MIN_HOURS_HELD=\`${w.exitMinHoursHeld}\`\n` +
+      `WEATHER_EXIT_SCAN_INTERVAL_MS=\`${w.exitScanIntervalMs}\`\n\n` +
+      `_Runtime only: values are not persisted to .env automatically._\n` +
+      `Usage:\n` +
+      `/exit on|off\n` +
+      `/exitall — liquidate all positions NOW\n` +
+      `/exitcfg WEATHER_EXIT_PROFIT_TARGET 0.75`
+    );
+  }
+
+  private applyExitConfig(
+    keyRaw: string,
+    valueRaw: string,
+  ): { ok: boolean; msg: string } {
+    const key = keyRaw.trim().toUpperCase();
+    const normalized = key.startsWith("WEATHER_") ? key.slice(8) : key;
+    const w: WeatherConfig = config.weather;
+
+    const parseNum = (): number | null => {
+      const n = Number(valueRaw);
+      return Number.isFinite(n) ? n : null;
+    };
+    const parseIntNum = (): number | null => {
+      const n = Number(valueRaw);
+      return Number.isInteger(n) ? n : null;
+    };
+
+    switch (normalized) {
+      case "EXIT_ENABLED": {
+        const b = parseBool(valueRaw);
+        if (b === undefined) {
+          return {
+            ok: false,
+            msg: "Invalid boolean. Use true/false or on/off.",
+          };
+        }
+        w.exitEnabled = b;
+        return { ok: true, msg: `WEATHER_EXIT_ENABLED=${b}` };
+      }
+      case "EXIT_PROFIT_TARGET": {
+        const n = parseNum();
+        if (n == null || n < 0 || n > 10) {
+          return {
+            ok: false,
+            msg: "WEATHER_EXIT_PROFIT_TARGET must be between 0 and 10 (as a fraction).",
+          };
+        }
+        w.exitProfitTarget = n;
+        return {
+          ok: true,
+          msg: `WEATHER_EXIT_PROFIT_TARGET=${(n * 100).toFixed(1)}%`,
+        };
+      }
+      case "EXIT_STOP_LOSS": {
+        const n = parseNum();
+        if (n == null || n > 0 || n < -10) {
+          return {
+            ok: false,
+            msg: "WEATHER_EXIT_STOP_LOSS must be between -10 and 0 (as a fraction).",
+          };
+        }
+        w.exitStopLoss = n;
+        return {
+          ok: true,
+          msg: `WEATHER_EXIT_STOP_LOSS=${(n * 100).toFixed(1)}%`,
+        };
+      }
+      case "EXIT_MIN_HOURS_HELD": {
+        const n = parseNum();
+        if (n == null || n < 0) {
+          return {
+            ok: false,
+            msg: "WEATHER_EXIT_MIN_HOURS_HELD must be >= 0.",
+          };
+        }
+        w.exitMinHoursHeld = n;
+        return { ok: true, msg: `WEATHER_EXIT_MIN_HOURS_HELD=${n}h` };
+      }
+      case "EXIT_SCAN_INTERVAL_MS": {
+        const n = parseIntNum();
+        if (n == null || n < 1000) {
+          return {
+            ok: false,
+            msg: "WEATHER_EXIT_SCAN_INTERVAL_MS must be an integer >= 1000.",
+          };
+        }
+        w.exitScanIntervalMs = n;
+        return { ok: true, msg: `WEATHER_EXIT_SCAN_INTERVAL_MS=${n}ms` };
+      }
+      default:
+        return {
+          ok: false,
+          msg: "Unsupported key. Use one of: EXIT_ENABLED, EXIT_PROFIT_TARGET, EXIT_STOP_LOSS, EXIT_MIN_HOURS_HELD, EXIT_SCAN_INTERVAL_MS.",
+        };
+    }
+  }
+
   // ─── Help ─────────────────────────────────────────────────────────────────────
   private handleHelp(ctx: Context) {
     if (!this.allowed(ctx)) return;
@@ -1755,6 +1942,9 @@ export class TelegramBot {
         `/orders — active orders\n` +
         `/weather — report, or /weather on|off\n` +
         `/weathercfg [KEY VALUE] — show/set weather runtime config\n` +
+        `/exit — auto-exit toggle\n` +
+        `/exitall — liquidate all positions immediately\n` +
+        `/exitcfg [KEY VALUE] — show/set exit config\n` +
         `/debug — watcher diagnostics\n` +
         `/reset — clear history (keeps wallets+positions)\n` +
         `/dryrun on|off | /settings\n\n` +

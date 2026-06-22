@@ -89,6 +89,12 @@ export interface WeatherConfig {
   // backtest harness. Prevents overconfident, phantom-edge forecasts.
   backtestSigmaFloor: boolean; // apply the measured σ floor when data is present
   backtestMinSamples: number; // min scored days before a measured σ is trusted
+  // Exit management: auto-close positions based on P&L thresholds.
+  exitEnabled: boolean; // enable automatic exit/exit scanning
+  exitProfitTarget: number; // exit with >=this profit fraction (e.g. 0.60 = 60%)
+  exitStopLoss: number; // exit with <=this loss fraction (e.g. -0.30 = 30% loss)
+  exitMinHoursHeld: number; // min hours to hold before exiting (e.g. 1, 6, 24)
+  exitScanIntervalMs: number; // how often to check for exit opportunities
 }
 
 export interface GeoPoint {
@@ -168,7 +174,7 @@ export interface WeatherSignal {
   generatedAt: number;
 }
 
-// Record of an executed/simulated weather trade.
+// Record of an executed/simulated weather trade (BUY entry or SELL exit).
 export interface WeatherTradeRecord {
   ts: number;
   executionMode?: "DRY_RUN" | "LIVE";
@@ -178,13 +184,16 @@ export interface WeatherTradeRecord {
   targetDate: string;
   bucketLabel: string;
   tokenId: string;
-  side: "BUY";
+  side: "BUY" | "SELL";
   outcome: "Yes";
   price: number;
   sizeUsdc: number;
-  modelProb: number;
-  marketProb: number;
-  edge: number;
+  modelProb?: number; // only for BUY entries
+  marketProb?: number; // only for BUY entries
+  edge?: number; // only for BUY entries
+  pnlFraction?: number; // (exitPrice - entryPrice) / entryPrice, for exits
+  pnlUsd?: number; // realized PnL in USD, for exits
+  relatedBuyTradeId?: string; // references the BUY trade this SELL closes
   status: string; // PLACED | DRY_RUN | FAILED | SKIPPED
   reason?: string;
   orderId?: string;

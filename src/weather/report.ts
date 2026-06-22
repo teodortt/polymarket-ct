@@ -231,9 +231,15 @@ export function formatReport(
               ? "⏭️"
               : "❌";
       const when = new Date(t.ts).toISOString().slice(5, 16).replace("T", " ");
+      const detail =
+        t.side === "BUY" && t.edge != null
+          ? `(+${pct(t.edge)})`
+          : t.side === "SELL" && t.pnlFraction != null
+            ? `${t.pnlFraction >= 0 ? "+" : ""}${pct(t.pnlFraction)}`
+            : "";
       lines.push(
         `${icon} ${when} ${t.city} ${t.targetDate} ${t.bucketLabel} ` +
-          `$${t.sizeUsdc.toFixed(2)} @ ${t.price} (+${pct(t.edge)})`,
+          `${t.side} $${t.sizeUsdc.toFixed(2)} @ ${t.price} ${detail}`,
       );
     }
   }

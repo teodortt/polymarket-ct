@@ -51,6 +51,7 @@ async function main() {
     },
   });
   tg.setWeatherReportProvider(() => weather.getReport());
+  tg.setWeatherEngine(weather);
   weather
     .start()
     .catch((err: Error) =>

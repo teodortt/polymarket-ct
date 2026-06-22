@@ -131,6 +131,20 @@ const weather: WeatherConfig = {
   backtestMinSamples: parseInt(
     process.env.WEATHER_BACKTEST_MIN_SAMPLES || "20",
   ),
+  // Exit management: automatically close positions based on P&L thresholds.
+  exitEnabled: process.env.WEATHER_EXIT_ENABLED === "true",
+  // Exit position when profit reaches this fraction (e.g. 0.60 = 60% ROI).
+  exitProfitTarget: parseFloat(
+    process.env.WEATHER_EXIT_PROFIT_TARGET || "0.75",
+  ),
+  // Exit position when loss reaches this fraction (e.g. -0.30 = 30% loss).
+  exitStopLoss: parseFloat(process.env.WEATHER_EXIT_STOP_LOSS || "-0.30"),
+  // Minimum hours to hold a position before exiting (prevents churn).
+  exitMinHoursHeld: parseFloat(process.env.WEATHER_EXIT_MIN_HOURS_HELD || "1"),
+  // How often to scan for exit opportunities (milliseconds).
+  exitScanIntervalMs: parseInt(
+    process.env.WEATHER_EXIT_SCAN_INTERVAL_MS || "60000",
+  ),
 };
 
 export const config = {

@@ -156,9 +156,19 @@ export class WeatherEngine {
       );
     }
 
+    // Track when to run next exit scan
+    let nextExitScanAt = Date.now() + this.cfg.exitScanIntervalMs;
+
     while (this.running) {
       try {
-        if (this.cfg.enabled) await this.scanOnce();
+        if (this.cfg.enabled) {
+          await this.scanOnce();
+          // Opportunistically scan for exits
+          if (this.cfg.exitEnabled && Date.now() >= nextExitScanAt) {
+            await this.scanForExits();
+            nextExitScanAt = Date.now() + this.cfg.exitScanIntervalMs;
+          }
+        }
       } catch (err: any) {
         console.error("[Weather] scan error:", err?.message ?? err);
       }
@@ -343,6 +353,218 @@ export class WeatherEngine {
 
     await this.notifyTrade(signal, rec);
     return result.status === "PLACED" || result.status === "DRY_RUN";
+  }
+
+  // ── exit management ──────────────────────────────────────────────────────────
+  /**
+   * Scan for open positions that should be exited based on P&L thresholds or
+   * profit-taking targets. Runs periodically in the main loop.
+   */
+  private async scanForExits(): Promise<void> {
+    const openPositions = this.getOpenPositions();
+    if (openPositions.length === 0) return;
+
+    console.log(
+      `[Weather] Scanning ${openPositions.length} open position(s) for exits...`,
+    );
+
+    for (const buyTrade of openPositions) {
+      try {
+        await this.maybeExitPosition(buyTrade);
+      } catch (err: any) {
+        console.error(
+          `[Weather] Exit scan failed for ${buyTrade.tokenId}: ${err?.message ?? err}`,
+        );
+      }
+      await sleep(250); // be polite to API
+    }
+  }
+
+  /**
+   * Find all open BUY positions (trades without a corresponding SELL).
+   * Public so Telegram can query and manually trigger exits.
+   */
+  getOpenPositions(): WeatherTradeRecord[] {
+    const mode = this.currentExecutionMode();
+    const opens: WeatherTradeRecord[] = [];
+    const closedTokens = new Set<string>();
+
+    // Collect all SELL trades to know which positions are closed
+    for (const trade of this.state.trades) {
+      if (
+        tradeExecutionMode(trade) === mode &&
+        trade.side === "SELL" &&
+        (trade.status === "PLACED" || trade.status === "DRY_RUN")
+      ) {
+        closedTokens.add(trade.tokenId);
+      }
+    }
+
+    // Return all active BUY trades that aren't closed by a SELL
+    for (const trade of this.activeTrades()) {
+      if (
+        trade.side === "BUY" &&
+        (trade.status === "PLACED" || trade.status === "DRY_RUN") &&
+        !closedTokens.has(trade.tokenId)
+      ) {
+        opens.push(trade);
+      }
+    }
+
+    return opens;
+  }
+
+  /**
+   * Check if a position should be exited based on P&L thresholds.
+   * Returns {pnlFraction, exitPrice, shouldExit, reason}.
+   */
+  private async calculatePositionPnL(buyTrade: WeatherTradeRecord): Promise<{
+    pnlFraction: number | null;
+    exitPrice: number | null;
+    shouldExit: boolean;
+    reason: string;
+  }> {
+    // Fetch current market price for liquidation (SELL side).
+    let exitPrice: number | null = null;
+    try {
+      const res = await axios.get(`${CLOB_API}/price`, {
+        params: { token_id: buyTrade.tokenId, side: "SELL" },
+        timeout: 3000,
+      });
+      exitPrice = parseFloat(res.data?.price ?? "NaN");
+      if (!Number.isFinite(exitPrice)) exitPrice = null;
+    } catch {
+      /* ignore fetch errors; just can't exit this time */
+    }
+
+    if (!exitPrice) {
+      return {
+        pnlFraction: null,
+        exitPrice: null,
+        shouldExit: false,
+        reason: "No market price available",
+      };
+    }
+
+    const pnlFraction = (exitPrice - buyTrade.price) / buyTrade.price;
+    const hoursHeld = (Date.now() - buyTrade.ts) / (1000 * 3600);
+
+    // Check hold time
+    if (hoursHeld < this.cfg.exitMinHoursHeld) {
+      return {
+        pnlFraction,
+        exitPrice,
+        shouldExit: false,
+        reason: `Only held ${hoursHeld.toFixed(1)}h (min ${this.cfg.exitMinHoursHeld}h)`,
+      };
+    }
+
+    // Check profit target
+    if (pnlFraction >= this.cfg.exitProfitTarget) {
+      return {
+        pnlFraction,
+        exitPrice,
+        shouldExit: true,
+        reason: `Hit profit target: +${(pnlFraction * 100).toFixed(1)}%`,
+      };
+    }
+
+    // Check stop loss
+    if (pnlFraction <= this.cfg.exitStopLoss) {
+      return {
+        pnlFraction,
+        exitPrice,
+        shouldExit: true,
+        reason: `Hit stop loss: ${(pnlFraction * 100).toFixed(1)}%`,
+      };
+    }
+
+    return {
+      pnlFraction,
+      exitPrice,
+      shouldExit: false,
+      reason: `Within thresholds (${(pnlFraction * 100).toFixed(1)}%)`,
+    };
+  }
+
+  /**
+   * Check if an open position should be exited and place a SELL if so.
+   * Public so Telegram can manually trigger exits.
+   */
+  async maybeExitPosition(buyTrade: WeatherTradeRecord): Promise<void> {
+    const pnlInfo = await this.calculatePositionPnL(buyTrade);
+
+    if (!pnlInfo.shouldExit) {
+      // Just log, don't exit
+      if (pnlInfo.exitPrice) {
+        const pnlPct = pnlInfo.pnlFraction
+          ? (pnlInfo.pnlFraction * 100).toFixed(1)
+          : "?";
+        console.log(
+          `[Weather] ${buyTrade.city}/${buyTrade.bucketLabel}: ${pnlPct}% ` +
+            `(${pnlInfo.reason})`,
+        );
+      }
+      return;
+    }
+
+    if (!pnlInfo.exitPrice) {
+      console.warn(
+        `[Weather] Cannot exit ${buyTrade.tokenId}: no market price`,
+      );
+      return;
+    }
+
+    // Place SELL order
+    console.log(
+      `[Weather] 🚪 Exiting ${buyTrade.city}/${buyTrade.bucketLabel}: ` +
+        `${pnlInfo.reason} | Price: ${buyTrade.price} → ${pnlInfo.exitPrice}`,
+    );
+
+    const trade: Trade = {
+      id: `weather-exit-${buyTrade.tokenId}-${Date.now()}`,
+      market: "", // populated by copyTradeWithSize
+      outcome: "Yes",
+      tokenId: buyTrade.tokenId,
+      side: "SELL",
+      price: pnlInfo.exitPrice,
+      size: buyTrade.sizeUsdc / buyTrade.price, // convert USDC to shares
+      timestamp: Math.floor(Date.now() / 1000),
+      transactionHash: "",
+      maker_address: "",
+      taker_address: "",
+      type: "TAKER",
+    };
+
+    const result = await copyTradeWithSize(trade, buyTrade.sizeUsdc);
+
+    const pnlUsd =
+      (pnlInfo.exitPrice - buyTrade.price) *
+      (buyTrade.sizeUsdc / buyTrade.price);
+
+    const rec: WeatherTradeRecord = {
+      ts: Date.now(),
+      executionMode: this.currentExecutionMode(),
+      eventId: buyTrade.eventId,
+      eventTitle: buyTrade.eventTitle,
+      city: buyTrade.city,
+      targetDate: buyTrade.targetDate,
+      bucketLabel: buyTrade.bucketLabel,
+      tokenId: buyTrade.tokenId,
+      side: "SELL",
+      outcome: "Yes",
+      price: pnlInfo.exitPrice,
+      sizeUsdc: buyTrade.sizeUsdc,
+      pnlFraction: pnlInfo.pnlFraction || 0,
+      pnlUsd,
+      relatedBuyTradeId: buyTrade.orderId,
+      status: result.status,
+      reason: result.reason || pnlInfo.reason,
+      orderId: result.orderId,
+    };
+    this.recordTrade(rec);
+
+    await this.notifyExit(buyTrade, rec);
   }
 
   // ── bankroll / accounting ─────────────────────────────────────────────────────
@@ -714,12 +936,46 @@ export class WeatherEngine {
       `${icon} *Weather bet* — ${rec.status}\n\n` +
       `🌡 ${signal.event.city} • ${rec.targetDate}\n` +
       `Bucket: *${rec.bucketLabel}*\n` +
-      `Model ${(rec.modelProb * 100).toFixed(1)}% vs ask ${(rec.marketProb * 100).toFixed(1)}% ` +
-      `→ edge *+${(rec.edge * 100).toFixed(1)}%*\n` +
+      (rec.modelProb != null && rec.marketProb != null && rec.edge != null
+        ? `Model ${(rec.modelProb * 100).toFixed(1)}% vs ask ${(rec.marketProb * 100).toFixed(1)}% ` +
+          `→ edge *+${(rec.edge * 100).toFixed(1)}%*\n`
+        : "") +
       `Forecast μ ${f.mean.toFixed(1)}°${f.unit} (p10–p90 ${f.p10.toFixed(0)}–${f.p90.toFixed(0)})\n` +
       `*BUY* $${rec.sizeUsdc.toFixed(2)} @ ${rec.price}` +
       (rec.reason ? `\n_${rec.reason}_` : "") +
       (rec.orderId ? `\n\`${rec.orderId}\`` : "");
+    try {
+      await this.notifier.send(msg);
+    } catch {
+      /* notification failures must never break the loop */
+    }
+  }
+
+  private async notifyExit(
+    buyTrade: WeatherTradeRecord,
+    sellRec: WeatherTradeRecord,
+  ) {
+    if (!this.notifier) return;
+    const icon =
+      sellRec.status === "PLACED"
+        ? "✅"
+        : sellRec.status === "DRY_RUN"
+          ? "🔵"
+          : sellRec.status === "SKIPPED"
+            ? "⏭️"
+            : "❌";
+    const pnlPct = sellRec.pnlFraction
+      ? (sellRec.pnlFraction * 100).toFixed(1)
+      : "?";
+    const pnlSign = sellRec.pnlFraction && sellRec.pnlFraction >= 0 ? "+" : "";
+    const msg =
+      `${icon} *Weather exit* — ${sellRec.status}\n\n` +
+      `🌡 ${sellRec.city} • ${sellRec.targetDate}\n` +
+      `Bucket: *${sellRec.bucketLabel}*\n` +
+      `*SELL* $${sellRec.sizeUsdc.toFixed(2)} @ ${sellRec.price}\n` +
+      `P&L: *${pnlSign}${pnlPct}%* ($${sellRec.pnlUsd?.toFixed(2) ?? "?"})\n` +
+      `Reason: _${sellRec.reason || "manual"}_` +
+      (sellRec.orderId ? `\n\`${sellRec.orderId}\`` : "");
     try {
       await this.notifier.send(msg);
     } catch {
