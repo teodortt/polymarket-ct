@@ -150,13 +150,15 @@ export async function fetchEnsembleMaxes(
 
   try {
     let res: any = null;
-    for (let attempt = 0; attempt <= ENSEMBLE_RETRY_DELAYS_MS.length; attempt++) {
+    const retries = ENSEMBLE_RETRY_DELAYS_MS.length;
+    for (let attempt = 0; attempt < retries + 1; attempt++) {
+      const hasRetry = attempt < retries;
       try {
         res = await axios.get(ENSEMBLE_API, { params, timeout: 20_000 });
         break;
       } catch (err: any) {
         const status = err?.response?.status;
-        if (status !== 429 || attempt >= ENSEMBLE_RETRY_DELAYS_MS.length) {
+        if (status !== 429 || !hasRetry) {
           if (status === 429) {
             const retryAfterMs = parseRetryAfterMs(err);
             const cooldownMs = Math.max(
@@ -174,7 +176,7 @@ export async function fetchEnsembleMaxes(
         const retryAfterMs = parseRetryAfterMs(err);
         const delayMs = retryAfterMs ?? ENSEMBLE_RETRY_DELAYS_MS[attempt];
         console.warn(
-          `[Weather] rate-limited (429) — retrying in ${Math.ceil(delayMs / 1000)}s (attempt ${attempt + 1}/${ENSEMBLE_RETRY_DELAYS_MS.length})`,
+          `[Weather] rate-limited (429) — retrying in ${Math.ceil(delayMs / 1000)}s (attempt ${attempt + 1}/${retries})`,
         );
         await sleep(delayMs);
       }
@@ -282,6 +284,8 @@ export async function buildForecastDistribution(
   targetDate: string,
   cfg: WeatherConfig,
 ): Promise<{ dist: ForecastDistribution; summary: ForecastSummary } | null> {
+  // Keep ensemble fetch first: when that endpoint is in cooldown (429 burst),
+  // we avoid extra deterministic calls that would increase API pressure.
   const fetched = await fetchEnsembleMaxes(geo, unit, targetDate, cfg.models);
   if (!fetched) return null;
   const det = await fetchDeterministicMax(geo, unit, targetDate);
