@@ -11,19 +11,23 @@ export async function getTradesForWallet(
   walletAddress: string,
   after?: number,
 ): Promise<Trade[]> {
-  // Guard: skip obviously invalid addresses
+  // Guard: skip obviously invalid addresses (must be a 0x-prefixed 40-char hex)
   if (
     !walletAddress ||
     walletAddress.startsWith("0xtarget") ||
-    walletAddress.length < 10
+    !/^0x[0-9a-fA-F]{40}$/.test(walletAddress.trim())
   ) {
-    console.error("[API] TARGET_WALLETS is not set properly in .env!");
+    console.error(
+      `[API] Invalid wallet address skipped: "${walletAddress}" — check TARGET_WALLETS in .env`,
+    );
     return [];
   }
 
+  const user = walletAddress.trim().toLowerCase();
+
   try {
     const params: Record<string, string | number> = {
-      user: walletAddress.toLowerCase(),
+      user,
       limit: 100,
     };
     if (after) params.after = after;
@@ -32,6 +36,9 @@ export async function getTradesForWallet(
       params,
       timeout: 10_000,
       httpsAgent: directAgent,
+      headers: {
+        "User-Agent": "polymarket-ct/2.0.0",
+      },
     });
 
     const raw: any[] = Array.isArray(res.data)
@@ -54,6 +61,7 @@ export async function getTradesForWallet(
       console.error(
         `[API] Failed to fetch trades: ${err.message}`,
         `\n      URL   : ${DATA_API}/activity`,
+        `\n      User  : ${user}`,
         `\n      Status: ${err.response?.status}`,
         `\n      Body  : ${JSON.stringify(err.response?.data)}`,
       );
