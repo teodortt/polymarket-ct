@@ -268,7 +268,7 @@ export class WeatherEngine {
           `[Weather] event "${event.title}" failed: ${err?.message ?? err}`,
         );
       }
-      await sleep(250); // be polite to the forecast API
+      await sleep(1_500); // rate-limit buffer for Open-Meteo API
     }
 
     this.lastSignals = signals;
