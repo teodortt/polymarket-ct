@@ -79,7 +79,7 @@ const weather: WeatherConfig = {
   // Never trade an event whose measurement day is fewer than this many days
   // away. Same-day (lead 0) markets are effectively settled — the book already
   // knows the realized high while the forecast still shows its prior guess.
-  minLeadDays: parseInt(process.env.WEATHER_MIN_LEAD_DAYS || "1"),
+  minLeadDays: parseInt(process.env.WEATHER_MIN_LEAD_DAYS || "0"),
   maxTradesPerScan: parseInt(process.env.WEATHER_MAX_TRADES_PER_SCAN || "3"),
   maxTradesPerDay: parseInt(process.env.WEATHER_MAX_TRADES_PER_DAY || "20"),
   // KDE smoothing over ensemble members (°F). Covers integer rounding,
