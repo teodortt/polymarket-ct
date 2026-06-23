@@ -1,4 +1,5 @@
 import { WeatherSignal, WeatherTradeRecord } from "../types";
+import { config } from "../config";
 
 interface ReportOpts {
   markdown: boolean;
@@ -211,7 +212,18 @@ export function formatReport(
         `✅ Edge: ${b(s.best.bucket.label)} — model ${pct(s.best.modelProb)} vs ask ${pct(s.best.buyPrice)} = ${b("+" + pct(s.best.edge))} (Kelly ${pct(s.best.kellyFraction)})`,
       );
     } else {
-      lines.push(`— no bucket above the edge threshold`);
+      const reasons: string[] = [];
+      if (s.bestRejectionReason) reasons.push(s.bestRejectionReason);
+      if (s.forecast.leadDays < config.weather.minLeadDays) {
+        reasons.push(
+          `lead ${s.forecast.leadDays}d < minLeadDays ${config.weather.minLeadDays}`,
+        );
+      }
+      lines.push(
+        reasons.length > 0
+          ? `— no trade: ${reasons.join("; ")}`
+          : `— no trade candidate this scan`,
+      );
     }
   }
 

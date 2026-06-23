@@ -176,6 +176,7 @@ export interface WeatherSignal {
   forecast: ForecastSummary;
   buckets: BucketSignal[]; // sorted by modelProb desc
   best: BucketSignal | null; // best actionable positive-edge bucket
+  bestRejectionReason?: string; // why mode bucket was not actionable
   generatedAt: number;
 }
 

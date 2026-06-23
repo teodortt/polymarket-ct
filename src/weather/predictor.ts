@@ -58,6 +58,7 @@ export function predictEvent(
   signals.sort((a, b) => b.modelProb - a.modelProb);
 
   const best = pickBest(signals, cfg);
+  const bestRejectionReason = best ? undefined : rejectReason(signals, cfg);
 
   return {
     event,
@@ -65,6 +66,7 @@ export function predictEvent(
     forecast: summary,
     buckets: signals,
     best,
+    bestRejectionReason,
     generatedAt: Date.now(),
   };
 }
@@ -89,4 +91,21 @@ function pickBest(
   if (mode.bucket.liquidity < cfg.minLiquidityUsdc) return null;
   if (mode.edge < cfg.minEdge) return null;
   return mode;
+}
+
+function rejectReason(signals: BucketSignal[], cfg: WeatherConfig): string {
+  const mode = signals[0];
+  if (!mode) return "no forecast buckets";
+  if (!mode.bucket.acceptingOrders) return "market not accepting orders";
+  if (mode.buyPrice == null) return "no ask quote on model-top bucket";
+  if (mode.buyPrice < cfg.minPrice)
+    return `ask ${mode.buyPrice.toFixed(3)} < min price ${cfg.minPrice.toFixed(3)}`;
+  if (mode.buyPrice > cfg.maxPrice)
+    return `ask ${mode.buyPrice.toFixed(3)} > max price ${cfg.maxPrice.toFixed(3)}`;
+  if (mode.bucket.liquidity < cfg.minLiquidityUsdc) {
+    return `liquidity $${mode.bucket.liquidity.toFixed(0)} < min $${cfg.minLiquidityUsdc.toFixed(0)}`;
+  }
+  if (mode.edge < cfg.minEdge)
+    return `edge ${(mode.edge * 100).toFixed(1)}% < min ${(cfg.minEdge * 100).toFixed(1)}%`;
+  return "filtered by strategy guard";
 }

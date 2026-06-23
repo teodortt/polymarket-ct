@@ -1653,10 +1653,12 @@ export class TelegramBot {
     return (
       `🌦 *Weather config*\n\n` +
       `WEATHER_ENABLED=\`${w.enabled}\`\n` +
+      `WEATHER_MIN_EDGE=\`${w.minEdge}\`\n` +
       `WEATHER_MIN_PRICE=\`${w.minPrice}\`\n` +
       `WEATHER_MAX_PRICE=\`${w.maxPrice}\`\n` +
       `WEATHER_MIN_LIQUIDITY_USDC=\`${w.minLiquidityUsdc}\`\n` +
       `WEATHER_MAX_LIQUIDITY_FRACTION=\`${w.maxLiquidityFraction}\`\n` +
+      `WEATHER_MIN_LEAD_DAYS=\`${w.minLeadDays}\`\n` +
       `WEATHER_SPREAD_INFLATION=\`${w.spreadInflation}\`\n` +
       `WEATHER_KDE_BANDWIDTH_F=\`${w.kdeBandwidthF}\`\n` +
       `WEATHER_KDE_LEAD_PER_DAY_F=\`${w.kdeLeadPerDayF}\`\n` +
@@ -1700,6 +1702,17 @@ export class TelegramBot {
         w.enabled = b;
         return { ok: true, msg: `WEATHER_ENABLED=${b}` };
       }
+      case "MIN_EDGE": {
+        const n = parseNum();
+        if (n == null || n < 0 || n > 1) {
+          return {
+            ok: false,
+            msg: "WEATHER_MIN_EDGE must be between 0 and 1.",
+          };
+        }
+        w.minEdge = n;
+        return { ok: true, msg: `WEATHER_MIN_EDGE=${n}` };
+      }
       case "MIN_PRICE": {
         const n = parseNum();
         if (n == null || n < 0 || n > 1) {
@@ -1741,6 +1754,17 @@ export class TelegramBot {
         }
         w.maxLiquidityFraction = n;
         return { ok: true, msg: `WEATHER_MAX_LIQUIDITY_FRACTION=${n}` };
+      }
+      case "MIN_LEAD_DAYS": {
+        const n = parseIntNum();
+        if (n == null || n < 0) {
+          return {
+            ok: false,
+            msg: "WEATHER_MIN_LEAD_DAYS must be an integer >= 0.",
+          };
+        }
+        w.minLeadDays = n;
+        return { ok: true, msg: `WEATHER_MIN_LEAD_DAYS=${n}` };
       }
       case "SPREAD_INFLATION": {
         const n = parseNum();
@@ -1814,7 +1838,7 @@ export class TelegramBot {
       default:
         return {
           ok: false,
-          msg: "Unsupported key. Use one of: WEATHER_ENABLED, WEATHER_MIN_PRICE, WEATHER_MAX_PRICE, WEATHER_MIN_LIQUIDITY_USDC, WEATHER_MAX_LIQUIDITY_FRACTION, WEATHER_SPREAD_INFLATION, WEATHER_KDE_BANDWIDTH_F, WEATHER_KDE_LEAD_PER_DAY_F, WEATHER_SCAN_INTERVAL_MS, WEATHER_MAX_TRADES_PER_SCAN, WEATHER_MAX_TRADES_PER_DAY, WEATHER_MODELS.",
+          msg: "Unsupported key. Use one of: WEATHER_ENABLED, WEATHER_MIN_EDGE, WEATHER_MIN_PRICE, WEATHER_MAX_PRICE, WEATHER_MIN_LIQUIDITY_USDC, WEATHER_MAX_LIQUIDITY_FRACTION, WEATHER_MIN_LEAD_DAYS, WEATHER_SPREAD_INFLATION, WEATHER_KDE_BANDWIDTH_F, WEATHER_KDE_LEAD_PER_DAY_F, WEATHER_SCAN_INTERVAL_MS, WEATHER_MAX_TRADES_PER_SCAN, WEATHER_MAX_TRADES_PER_DAY, WEATHER_MODELS.",
         };
     }
   }
