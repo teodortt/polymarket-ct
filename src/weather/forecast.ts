@@ -4,6 +4,42 @@ import { ForecastSummary, GeoPoint, TempUnit, WeatherConfig } from "../types";
 const ENSEMBLE_API = "https://ensemble-api.open-meteo.com/v1/ensemble";
 const FORECAST_API = "https://api.open-meteo.com/v1/forecast";
 
+const MAX_RETRIES = 4;
+// Wait times between retry attempts: 0→2 s, 1→4 s, 2→8 s, 3→16 s
+const RETRY_BASE_MS = 2_000;
+
+/**
+ * Wraps an axios GET call with exponential back-off retries for HTTP 429
+ * (Too Many Requests). Other errors are re-thrown immediately.
+ */
+async function getWithRetry(
+  url: string,
+  params: Record<string, unknown>,
+  timeout: number,
+): Promise<any> {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await axios.get(url, { params, timeout });
+    } catch (err: any) {
+      const status = err?.response?.status;
+      if (status === 429 && attempt < MAX_RETRIES) {
+        // Honor Retry-After header if present, otherwise use exponential back-off.
+        const retryAfterSec = parseInt(
+          err?.response?.headers?.["retry-after"] ?? "0",
+          10,
+        );
+        const waitMs =
+          retryAfterSec > 0
+            ? retryAfterSec * 1_000
+            : RETRY_BASE_MS * 2 ** attempt;
+        await new Promise((r) => setTimeout(r, waitMs));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 // ── Normal CDF (no deps) ──────────────────────────────────────────────────────
 // Abramowitz & Stegun 7.1.26 error-function approximation (|err| < 1.5e-7).
 function erf(x: number): number {
@@ -102,8 +138,9 @@ export async function fetchEnsembleMaxes(
   const forecastDays = Math.min(16, Math.max(2, leadDays + 2));
 
   try {
-    const res = await axios.get(ENSEMBLE_API, {
-      params: {
+    const res = await getWithRetry(
+      ENSEMBLE_API,
+      {
         latitude: geo.lat,
         longitude: geo.lon,
         hourly: "temperature_2m",
@@ -112,8 +149,8 @@ export async function fetchEnsembleMaxes(
         timezone: "auto",
         forecast_days: forecastDays,
       },
-      timeout: 20_000,
-    });
+      20_000,
+    );
 
     const hourly = res.data?.hourly;
     const times: string[] = hourly?.time ?? [];
@@ -171,8 +208,9 @@ export async function fetchDeterministicMax(
   const leadDays = leadDaysUntil(targetDate);
   const forecastDays = Math.min(16, Math.max(2, leadDays + 2));
   try {
-    const res = await axios.get(FORECAST_API, {
-      params: {
+    const res = await getWithRetry(
+      FORECAST_API,
+      {
         latitude: geo.lat,
         longitude: geo.lon,
         daily: "temperature_2m_max",
@@ -180,8 +218,8 @@ export async function fetchDeterministicMax(
         timezone: "auto",
         forecast_days: forecastDays,
       },
-      timeout: 15_000,
-    });
+      15_000,
+    );
     const days: string[] = res.data?.daily?.time ?? [];
     const vals: (number | null)[] = res.data?.daily?.temperature_2m_max ?? [];
     const i = days.indexOf(targetDate);
@@ -216,11 +254,9 @@ export async function buildForecastDistribution(
   targetDate: string,
   cfg: WeatherConfig,
 ): Promise<{ dist: ForecastDistribution; summary: ForecastSummary } | null> {
-  const [fetched, det] = await Promise.all([
-    fetchEnsembleMaxes(geo, unit, targetDate, cfg.models),
-    fetchDeterministicMax(geo, unit, targetDate),
-  ]);
+  const fetched = await fetchEnsembleMaxes(geo, unit, targetDate, cfg.models);
   if (!fetched) return null;
+  const det = await fetchDeterministicMax(geo, unit, targetDate);
   const { maxes, leadDays } = fetched;
 
   const ensembleMean = maxes.reduce((s, v) => s + v, 0) / maxes.length;
