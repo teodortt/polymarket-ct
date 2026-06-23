@@ -1559,7 +1559,10 @@ export class TelegramBot {
     }
     try {
       const text = await this.weatherReport();
-      this.editOrReply(ctx, text, this.refreshBtn("refresh:weather"));
+      this.editOrReply(ctx, text, {
+        ...(this.refreshBtn("refresh:weather") as any),
+        parse_mode: undefined,
+      });
     } catch (err: any) {
       this.editOrReply(ctx, `❌ Weather report failed: ${err?.message ?? err}`);
     }
@@ -1921,9 +1924,7 @@ export class TelegramBot {
   async send(text: string) {
     const chunks = splitMessage(text);
     for (const chunk of chunks) {
-      await this.sendChunk(Number(this.allowedChatId), chunk, {
-        parse_mode: "Markdown",
-      });
+      await this.sendChunk(Number(this.allowedChatId), chunk, {});
     }
   }
 

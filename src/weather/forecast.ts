@@ -3,6 +3,31 @@ import { ForecastSummary, GeoPoint, TempUnit, WeatherConfig } from "../types";
 
 const ENSEMBLE_API = "https://ensemble-api.open-meteo.com/v1/ensemble";
 const FORECAST_API = "https://api.open-meteo.com/v1/forecast";
+const ENSEMBLE_RETRY_DELAYS_MS = [2_000, 5_000, 15_000];
+const ENSEMBLE_COOLDOWN_LOG_EVERY_MS = 30_000;
+const MIN_ENSEMBLE_COOLDOWN_MS = 60_000;
+
+let ensembleCooldownUntil = 0;
+let lastEnsembleCooldownLogAt = 0;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseRetryAfterMs(err: any): number | null {
+  const raw =
+    err?.response?.headers?.["retry-after"] ??
+    err?.response?.headers?.["Retry-After"];
+  if (raw == null) return null;
+  const s = Number(raw);
+  if (Number.isFinite(s) && s > 0) return Math.round(s * 1000);
+  const ts = Date.parse(String(raw));
+  if (!Number.isNaN(ts)) {
+    const ms = ts - Date.now();
+    if (ms > 0) return ms;
+  }
+  return null;
+}
 
 // ── Normal CDF (no deps) ──────────────────────────────────────────────────────
 // Abramowitz & Stegun 7.1.26 error-function approximation (|err| < 1.5e-7).
@@ -96,24 +121,65 @@ export async function fetchEnsembleMaxes(
   targetDate: string,
   models: string,
 ): Promise<{ maxes: number[]; leadDays: number } | null> {
+  const now = Date.now();
+  if (now < ensembleCooldownUntil) {
+    if (now - lastEnsembleCooldownLogAt >= ENSEMBLE_COOLDOWN_LOG_EVERY_MS) {
+      const sec = Math.max(1, Math.ceil((ensembleCooldownUntil - now) / 1000));
+      console.warn(
+        `[Weather] ensemble API cooling down after 429s — skipping ${geo.name} ${targetDate} for ${sec}s`,
+      );
+      lastEnsembleCooldownLogAt = now;
+    }
+    return null;
+  }
+
   const leadDays = leadDaysUntil(targetDate);
   // Fetch a couple of extra days so the full local day is covered regardless of
   // the location's UTC offset.
   const forecastDays = Math.min(16, Math.max(2, leadDays + 2));
 
+  const params = {
+    latitude: geo.lat,
+    longitude: geo.lon,
+    hourly: "temperature_2m",
+    models,
+    temperature_unit: unit === "F" ? "fahrenheit" : "celsius",
+    timezone: "auto",
+    forecast_days: forecastDays,
+  };
+
   try {
-    const res = await axios.get(ENSEMBLE_API, {
-      params: {
-        latitude: geo.lat,
-        longitude: geo.lon,
-        hourly: "temperature_2m",
-        models,
-        temperature_unit: unit === "F" ? "fahrenheit" : "celsius",
-        timezone: "auto",
-        forecast_days: forecastDays,
-      },
-      timeout: 20_000,
-    });
+    let res: any = null;
+    for (let attempt = 0; attempt <= ENSEMBLE_RETRY_DELAYS_MS.length; attempt++) {
+      try {
+        res = await axios.get(ENSEMBLE_API, { params, timeout: 20_000 });
+        break;
+      } catch (err: any) {
+        const status = err?.response?.status;
+        if (status !== 429 || attempt >= ENSEMBLE_RETRY_DELAYS_MS.length) {
+          if (status === 429) {
+            const retryAfterMs = parseRetryAfterMs(err);
+            const cooldownMs = Math.max(
+              MIN_ENSEMBLE_COOLDOWN_MS,
+              retryAfterMs ?? ENSEMBLE_RETRY_DELAYS_MS[ENSEMBLE_RETRY_DELAYS_MS.length - 1],
+            );
+            ensembleCooldownUntil = Date.now() + cooldownMs;
+            lastEnsembleCooldownLogAt = Date.now();
+            console.warn(
+              `[Weather] rate-limited (429) — cooling ensemble requests for ${Math.ceil(cooldownMs / 1000)}s`,
+            );
+          }
+          throw err;
+        }
+        const retryAfterMs = parseRetryAfterMs(err);
+        const delayMs = retryAfterMs ?? ENSEMBLE_RETRY_DELAYS_MS[attempt];
+        console.warn(
+          `[Weather] rate-limited (429) — retrying in ${Math.ceil(delayMs / 1000)}s (attempt ${attempt + 1}/${ENSEMBLE_RETRY_DELAYS_MS.length})`,
+        );
+        await sleep(delayMs);
+      }
+    }
+    if (!res) return null;
 
     const hourly = res.data?.hourly;
     const times: string[] = hourly?.time ?? [];
@@ -216,11 +282,9 @@ export async function buildForecastDistribution(
   targetDate: string,
   cfg: WeatherConfig,
 ): Promise<{ dist: ForecastDistribution; summary: ForecastSummary } | null> {
-  const [fetched, det] = await Promise.all([
-    fetchEnsembleMaxes(geo, unit, targetDate, cfg.models),
-    fetchDeterministicMax(geo, unit, targetDate),
-  ]);
+  const fetched = await fetchEnsembleMaxes(geo, unit, targetDate, cfg.models);
   if (!fetched) return null;
+  const det = await fetchDeterministicMax(geo, unit, targetDate);
   const { maxes, leadDays } = fetched;
 
   const ensembleMean = maxes.reduce((s, v) => s + v, 0) / maxes.length;
