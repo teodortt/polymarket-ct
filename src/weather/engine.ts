@@ -31,12 +31,6 @@ const BACKTEST_PATH = path.join(DATA_DIR, "weatherBacktest.json");
 const TRADES_MAX = 1000;
 const CLOB_API = "https://clob.polymarket.com";
 
-// Escape Markdown special characters so they're treated as literal text.
-// Prevents "Can't find end of the entity" errors when city names contain _, *, etc.
-function escapeMarkdownChars(text: string): string {
-  return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, "\\$&");
-}
-
 // Minimal sink so the engine never depends on the Telegram module directly.
 export interface WeatherNotifier {
   send(text: string): Promise<unknown> | unknown;
@@ -1016,23 +1010,17 @@ export class WeatherEngine {
             ? "⏭️"
             : "❌";
     const f = signal.forecast;
-    // Escape markdown special characters in user-supplied fields
-    const escapedCity = escapeMarkdownChars(signal.event.city);
-    const escapedBucket = escapeMarkdownChars(rec.bucketLabel);
-    const escapedReason = rec.reason
-      ? escapeMarkdownChars(rec.reason)
-      : undefined;
     const msg =
       `${icon} *Weather bet* — ${rec.status}\n\n` +
-      `🌡 ${escapedCity} • ${rec.targetDate}\n` +
-      `Bucket: *${escapedBucket}*\n` +
+      `🌡 ${signal.event.city} • ${rec.targetDate}\n` +
+      `Bucket: *${rec.bucketLabel}*\n` +
       (rec.modelProb != null && rec.marketProb != null && rec.edge != null
         ? `Model ${(rec.modelProb * 100).toFixed(1)}% vs ask ${(rec.marketProb * 100).toFixed(1)}% ` +
           `→ edge *+${(rec.edge * 100).toFixed(1)}%*\n`
         : "") +
       `Forecast μ ${f.mean.toFixed(1)}°${f.unit} (p10–p90 ${f.p10.toFixed(0)}–${f.p90.toFixed(0)})\n` +
       `*BUY* $${rec.sizeUsdc.toFixed(2)} @ ${rec.price}` +
-      (escapedReason ? `\n_${escapedReason}_` : "") +
+      (rec.reason ? `\n_${rec.reason}_` : "") +
       (rec.orderId ? `\n\`${rec.orderId}\`` : "");
     try {
       await this.notifier.send(msg);
@@ -1058,17 +1046,13 @@ export class WeatherEngine {
       ? (sellRec.pnlFraction * 100).toFixed(1)
       : "?";
     const pnlSign = sellRec.pnlFraction && sellRec.pnlFraction >= 0 ? "+" : "";
-    // Escape markdown special characters in user-supplied fields
-    const escapedCity = escapeMarkdownChars(sellRec.city);
-    const escapedBucket = escapeMarkdownChars(sellRec.bucketLabel);
-    const escapedReason = escapeMarkdownChars(sellRec.reason || "manual");
     const msg =
       `${icon} *Weather exit* — ${sellRec.status}\n\n` +
-      `🌡 ${escapedCity} • ${sellRec.targetDate}\n` +
-      `Bucket: *${escapedBucket}*\n` +
+      `🌡 ${sellRec.city} • ${sellRec.targetDate}\n` +
+      `Bucket: *${sellRec.bucketLabel}*\n` +
       `*SELL* $${sellRec.sizeUsdc.toFixed(2)} @ ${sellRec.price}\n` +
       `P&L: *${pnlSign}${pnlPct}%* ($${sellRec.pnlUsd?.toFixed(2) ?? "?"})\n` +
-      `Reason: _${escapedReason}_` +
+      `Reason: _${sellRec.reason || "manual"}_` +
       (sellRec.orderId ? `\n\`${sellRec.orderId}\`` : "");
     try {
       await this.notifier.send(msg);
