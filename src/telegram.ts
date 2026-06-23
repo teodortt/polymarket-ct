@@ -481,9 +481,11 @@ export class TelegramBot {
   }
 
   private refreshBtn(action: string) {
-    return Markup.inlineKeyboard([
-      [Markup.button.callback("🔄 Refresh", action)],
-    ]);
+    return {
+      reply_markup: Markup.inlineKeyboard([
+        [Markup.button.callback("🔄 Refresh", action)],
+      ]).reply_markup,
+    };
   }
 
   private setupCommands() {
@@ -1560,7 +1562,7 @@ export class TelegramBot {
     try {
       const text = await this.weatherReport();
       this.editOrReply(ctx, text, {
-        ...(this.refreshBtn("refresh:weather") as any),
+        ...this.refreshBtn("refresh:weather"),
         parse_mode: undefined,
       });
     } catch (err: any) {

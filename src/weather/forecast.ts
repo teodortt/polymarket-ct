@@ -1,4 +1,4 @@
-import axios from "axios";
+import axios, { AxiosResponse } from "axios";
 import { ForecastSummary, GeoPoint, TempUnit, WeatherConfig } from "../types";
 
 const ENSEMBLE_API = "https://ensemble-api.open-meteo.com/v1/ensemble";
@@ -6,19 +6,29 @@ const FORECAST_API = "https://api.open-meteo.com/v1/forecast";
 const ENSEMBLE_RETRY_DELAYS_MS = [2_000, 5_000, 15_000];
 const ENSEMBLE_COOLDOWN_LOG_EVERY_MS = 30_000;
 const MIN_ENSEMBLE_COOLDOWN_MS = 60_000;
+const MAX_ENSEMBLE_RETRY_DELAY_MS =
+  ENSEMBLE_RETRY_DELAYS_MS[ENSEMBLE_RETRY_DELAYS_MS.length - 1];
 
 let ensembleCooldownUntil = 0;
 let lastEnsembleCooldownLogAt = 0;
+
+interface EnsembleHourlyResponse {
+  hourly?: Record<string, (number | null)[] | string[] | undefined> & {
+    time?: string[];
+  };
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function parseRetryAfterMs(err: any): number | null {
+// Retry-After may be either delta-seconds or an HTTP-date.
+function parseRetryAfterMs(err: unknown): number | null {
+  if (!axios.isAxiosError(err)) return null;
   const raw =
-    err?.response?.headers?.["retry-after"] ??
-    err?.response?.headers?.["Retry-After"];
-  if (raw == null) return null;
+    err.response?.headers?.["retry-after"] ??
+    err.response?.headers?.["Retry-After"];
+  if (raw === null || raw === undefined) return null;
   const s = Number(raw);
   if (Number.isFinite(s) && s > 0) return Math.round(s * 1000);
   const ts = Date.parse(String(raw));
@@ -126,7 +136,7 @@ export async function fetchEnsembleMaxes(
     if (now - lastEnsembleCooldownLogAt >= ENSEMBLE_COOLDOWN_LOG_EVERY_MS) {
       const sec = Math.max(1, Math.ceil((ensembleCooldownUntil - now) / 1000));
       console.warn(
-        `[Weather] ensemble API cooling down after 429s — skipping ${geo.name} ${targetDate} for ${sec}s`,
+        `[Weather] ensemble API cooling down after 429 — skipping ${geo.name} ${targetDate} for ${sec}s`,
       );
       lastEnsembleCooldownLogAt = now;
     }
@@ -149,24 +159,25 @@ export async function fetchEnsembleMaxes(
   };
 
   try {
-    let res: any = null;
+    let res!: AxiosResponse<EnsembleHourlyResponse>;
     const retries = ENSEMBLE_RETRY_DELAYS_MS.length;
-    for (let attempt = 0; attempt < retries + 1; attempt++) {
+    for (let attempt = 0; attempt <= retries; attempt++) {
       const hasRetry = attempt < retries;
       try {
         res = await axios.get(ENSEMBLE_API, { params, timeout: 20_000 });
         break;
-      } catch (err: any) {
-        const status = err?.response?.status;
+      } catch (err: unknown) {
+        const status = axios.isAxiosError(err) ? err.response?.status : undefined;
         if (status !== 429 || !hasRetry) {
           if (status === 429) {
             const retryAfterMs = parseRetryAfterMs(err);
             const cooldownMs = Math.max(
               MIN_ENSEMBLE_COOLDOWN_MS,
-              retryAfterMs ?? ENSEMBLE_RETRY_DELAYS_MS[ENSEMBLE_RETRY_DELAYS_MS.length - 1],
+              retryAfterMs ?? MAX_ENSEMBLE_RETRY_DELAY_MS,
             );
-            ensembleCooldownUntil = Date.now() + cooldownMs;
-            lastEnsembleCooldownLogAt = Date.now();
+            const nowTs = Date.now();
+            ensembleCooldownUntil = nowTs + cooldownMs;
+            lastEnsembleCooldownLogAt = nowTs;
             console.warn(
               `[Weather] rate-limited (429) — cooling ensemble requests for ${Math.ceil(cooldownMs / 1000)}s`,
             );
@@ -181,9 +192,8 @@ export async function fetchEnsembleMaxes(
         await sleep(delayMs);
       }
     }
-    if (!res) return null;
-
     const hourly = res.data?.hourly;
+    if (!hourly) return null;
     const times: string[] = hourly?.time ?? [];
     if (times.length === 0) return null;
 
@@ -201,12 +211,13 @@ export async function fetchEnsembleMaxes(
 
     const maxes: number[] = [];
     for (const key of memberKeys) {
-      const series: (number | null)[] = hourly[key];
+      const series = hourly[key];
+      if (!Array.isArray(series)) continue;
       let m = -Infinity;
       let any = false;
       for (const i of dayIdx) {
         const v = series[i];
-        if (v != null && Number.isFinite(v)) {
+        if (typeof v === "number" && Number.isFinite(v)) {
           if (v > m) m = v;
           any = true;
         }
