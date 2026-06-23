@@ -57,7 +57,10 @@ async function main() {
       console.error("[Weather] engine error:", err.message),
     );
 
+  let stopping = false;
   process.on("SIGINT", async () => {
+    if (stopping) return;
+    stopping = true;
     console.log("\n\n[Main] Shutting down...");
     bot.stop();
     weather.stop();
