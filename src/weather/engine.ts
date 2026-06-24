@@ -199,7 +199,10 @@ export class WeatherEngine {
     const events = await discoverTemperatureEvents({
       lookaheadDays: this.cfg.lookaheadDays,
       cities: this.cfg.cities,
-      minHoursToResolve: this.cfg.minHoursToResolve,
+      // Keep near-settlement events visible so the bias calibrator can still
+      // observe their realized high late in the day. The near-settlement
+      // *trade* guard is applied per-event in `maybeTrade` instead.
+      minHoursToResolve: 0,
     });
     console.log(`[Weather] scan: ${events.length} event(s) in window.`);
 
@@ -281,6 +284,21 @@ export class WeatherEngine {
     // Never trade essentially-settled, same-day outcomes — the book already
     // knows the realized high while the forecast still shows its prior guess.
     if (signal.forecast.leadDays < this.cfg.minLeadDays) return false;
+
+    // Same-day markets are tradeable while the high is still uncertain, but
+    // once the book is within `minHoursToResolve` hours of settlement the
+    // realized high is largely locked in and a stale forecast only invents
+    // edge against a market that already knows the answer. Discovery keeps
+    // these events visible for bias calibration; only trading is gated here.
+    if (this.cfg.minHoursToResolve > 0 && signal.event.endDate) {
+      const resolveMs = Date.parse(signal.event.endDate);
+      if (
+        Number.isFinite(resolveMs) &&
+        (resolveMs - Date.now()) / 3_600_000 < this.cfg.minHoursToResolve
+      ) {
+        return false;
+      }
+    }
 
     const bucket = best.bucket;
     // One position per city+date. Buckets are mutually exclusive, so stacking

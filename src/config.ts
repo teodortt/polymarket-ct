@@ -53,7 +53,7 @@ const weather: WeatherConfig = {
     .map((s) => s.trim())
     .filter(Boolean),
   // Minimum edge (model probability − price paid) needed to fire a trade.
-  minEdge: parseFloat(process.env.WEATHER_MIN_EDGE || "0.10"),
+  minEdge: parseFloat(process.env.WEATHER_MIN_EDGE || "0.08"),
   // Fractional Kelly. 0.25 = quarter-Kelly (conservative, recommended).
   kellyFraction: parseFloat(process.env.WEATHER_KELLY_FRACTION || "0.25"),
   // Bankroll for Kelly sizing. 0 = auto (dry-run start balance / live USDC).
@@ -70,15 +70,18 @@ const weather: WeatherConfig = {
   // Ignore buys outside this price band (a "0.99 → 1.00" edge isn't tradeable).
   minPrice: parseFloat(process.env.WEATHER_MIN_PRICE || "0.02"),
   maxPrice: parseFloat(process.env.WEATHER_MAX_PRICE || "0.97"),
-  // Skip events resolving within this many hours. With `minLeadDays` now
-  // guarding same-day trades, this defaults to 0 so near-settlement events stay
-  // visible — the bias calibrator needs to observe their realized outcome.
+  // Trade-time near-settlement guard: skip PLACING orders on events resolving
+  // within this many hours. Same-day (lead 0) markets are tradeable while the
+  // high is still uncertain, so this — not `minLeadDays` — is what keeps us out
+  // of books that already know the realized high. Discovery still surfaces
+  // these events so the bias calibrator can observe their settled outcome.
   minHoursToResolve: parseFloat(
-    process.env.WEATHER_MIN_HOURS_TO_RESOLVE || "0",
+    process.env.WEATHER_MIN_HOURS_TO_RESOLVE || "6",
   ),
   // Never trade an event whose measurement day is fewer than this many days
-  // away. Same-day (lead 0) markets are effectively settled — the book already
-  // knows the realized high while the forecast still shows its prior guess.
+  // away. Defaults to 0 so same-day markets ARE tradeable while the high is
+  // still uncertain; the `minHoursToResolve` gate (not this one) keeps us out
+  // of near-settlement same-day books. Set to 1 to disable same-day trading.
   minLeadDays: parseInt(process.env.WEATHER_MIN_LEAD_DAYS || "0"),
   maxTradesPerScan: parseInt(process.env.WEATHER_MAX_TRADES_PER_SCAN || "3"),
   maxTradesPerDay: parseInt(process.env.WEATHER_MAX_TRADES_PER_DAY || "20"),
