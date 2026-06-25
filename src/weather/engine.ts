@@ -285,19 +285,24 @@ export class WeatherEngine {
     // knows the realized high while the forecast still shows its prior guess.
     if (signal.forecast.leadDays < this.cfg.minLeadDays) return false;
 
-    // Same-day markets are tradeable while the high is still uncertain, but
-    // once the book is within `minHoursToResolve` hours of settlement the
-    // realized high is largely locked in and a stale forecast only invents
-    // edge against a market that already knows the answer. Discovery keeps
-    // these events visible for bias calibration; only trading is gated here.
-    if (this.cfg.minHoursToResolve > 0 && signal.event.endDate) {
-      const resolveMs = Date.parse(signal.event.endDate);
-      if (
-        Number.isFinite(resolveMs) &&
-        (resolveMs - Date.now()) / 3_600_000 < this.cfg.minHoursToResolve
-      ) {
-        return false;
-      }
+    // Same-day (lead 0) markets are tradeable while the day's high is still
+    // uncertain, but once the city is past its afternoon heating peak the high
+    // is effectively locked and a stale forecast would just trade against a
+    // market that already knows the outcome. Polymarket's `endDate` is always
+    // 12:00 UTC (the local MORNING for western cities), so it can't tell us
+    // this — instead approximate the city's local wall-clock from longitude
+    // (±1h is plenty for a peak-heating cutoff) and compare it to the
+    // measurement day. Skip only once we're at/after the cutoff ON that day.
+    if (signal.forecast.leadDays === 0 && this.cfg.sameDayCutoffHour < 24) {
+      const offsetMs = (signal.geo.lon / 15) * 3_600_000;
+      const localNow = new Date(Date.now() + offsetMs);
+      const localDate = localNow.toISOString().slice(0, 10);
+      const localHour = localNow.getUTCHours() + localNow.getUTCMinutes() / 60;
+      const onOrAfterPeak =
+        localDate > signal.event.targetDate ||
+        (localDate === signal.event.targetDate &&
+          localHour >= this.cfg.sameDayCutoffHour);
+      if (onOrAfterPeak) return false;
     }
 
     const bucket = best.bucket;

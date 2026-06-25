@@ -62,6 +62,7 @@ export interface WeatherConfig {
   maxPrice: number; // ignore buys richer than this
   minHoursToResolve: number; // skip events resolving sooner than this
   minLeadDays: number; // never trade events whose measurement day is < this away
+  sameDayCutoffHour: number; // skip lead-0 trades once city local hour >= this
   maxTradesPerScan: number;
   maxTradesPerDay: number;
   kdeBandwidthF: number; // KDE smoothing bandwidth in °F

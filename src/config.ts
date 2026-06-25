@@ -70,19 +70,28 @@ const weather: WeatherConfig = {
   // Ignore buys outside this price band (a "0.99 → 1.00" edge isn't tradeable).
   minPrice: parseFloat(process.env.WEATHER_MIN_PRICE || "0.02"),
   maxPrice: parseFloat(process.env.WEATHER_MAX_PRICE || "0.97"),
-  // Trade-time near-settlement guard: skip PLACING orders on events resolving
-  // within this many hours. Same-day (lead 0) markets are tradeable while the
-  // high is still uncertain, so this — not `minLeadDays` — is what keeps us out
-  // of books that already know the realized high. Discovery still surfaces
-  // these events so the bias calibrator can observe their settled outcome.
+  // Discovery-time filter only (DISABLED by default). Polymarket sets every
+  // event's `endDate` to 12:00 UTC of the measurement day regardless of city,
+  // so for western-hemisphere cities it lands in the local MORNING — long
+  // before the afternoon high — making "hours to resolve" a useless settlement
+  // proxy. The real same-day guard is `sameDayCutoffHour` (local-time based) in
+  // the engine; keep this 0 so events stay visible for bias calibration.
   minHoursToResolve: parseFloat(
-    process.env.WEATHER_MIN_HOURS_TO_RESOLVE || "6",
+    process.env.WEATHER_MIN_HOURS_TO_RESOLVE || "0",
   ),
   // Never trade an event whose measurement day is fewer than this many days
   // away. Defaults to 0 so same-day markets ARE tradeable while the high is
-  // still uncertain; the `minHoursToResolve` gate (not this one) keeps us out
-  // of near-settlement same-day books. Set to 1 to disable same-day trading.
+  // still uncertain; the `sameDayCutoffHour` gate (not this one) keeps us out
+  // of already-locked same-day books. Set to 1 to disable same-day trading.
   minLeadDays: parseInt(process.env.WEATHER_MIN_LEAD_DAYS || "0"),
+  // Same-day (lead 0) cutoff: skip opening a same-day position once the city's
+  // approximate LOCAL hour on the measurement day reaches this, by which point
+  // the afternoon heating peak has passed and the realized high is effectively
+  // locked. Local time is derived from longitude (±1h — fine for this), so no
+  // timezone data is needed. Set 24 to allow same-day trading all day long.
+  sameDayCutoffHour: parseFloat(
+    process.env.WEATHER_SAME_DAY_CUTOFF_HOUR || "16",
+  ),
   maxTradesPerScan: parseInt(process.env.WEATHER_MAX_TRADES_PER_SCAN || "3"),
   maxTradesPerDay: parseInt(process.env.WEATHER_MAX_TRADES_PER_DAY || "20"),
   // KDE smoothing over ensemble members (°F). Covers integer rounding,
