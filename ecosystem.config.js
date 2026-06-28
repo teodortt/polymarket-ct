@@ -15,6 +15,8 @@ function resolveDeployBranch() {
     }
 }
 
+const deployBranch = resolveDeployBranch();
+
 module.exports = {
     apps: [
         {
@@ -40,7 +42,7 @@ module.exports = {
             watch: false,
             restart_delay: 10000,
             env: {
-                ...(resolveDeployBranch() ? { DEPLOY_BRANCH: resolveDeployBranch() } : {}),
+                ...(deployBranch ? { DEPLOY_BRANCH: deployBranch } : {}),
                 DEPLOY_POLL_INTERVAL: "60"
             },
             error_file: "./logs/autopull.error.log",
