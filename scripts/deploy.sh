@@ -16,7 +16,7 @@ export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 # shellcheck disable=SC1091
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 
-BRANCH="${DEPLOY_BRANCH:-main}"
+BRANCH="${DEPLOY_BRANCH:-v3}"
 
 echo ">>> Fetching origin"
 git fetch --all --prune
