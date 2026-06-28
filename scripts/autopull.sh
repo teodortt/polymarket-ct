@@ -7,9 +7,24 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_DIR"
 
-BRANCH="${DEPLOY_BRANCH:-main}"
 INTERVAL="${DEPLOY_POLL_INTERVAL:-60}"   # seconds
 APP_NAME="polymarket-copybot"
+
+resolve_branch() {
+  if [ -n "${DEPLOY_BRANCH:-}" ]; then
+    printf '%s\n' "$DEPLOY_BRANCH"
+    return
+  fi
+
+  local current_branch
+  current_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  if [ -z "$current_branch" ]; then
+    echo "[autopull] unable to determine current branch; set DEPLOY_BRANCH explicitly" >&2
+    exit 1
+  fi
+
+  printf '%s\n' "$current_branch"
+}
 
 ensure_app_running() {
   # Keep the bot process alive even when git is unavailable or there are no new commits.
@@ -30,6 +45,8 @@ ensure_app_running() {
     pm2 save >/dev/null 2>&1 || true
   fi
 }
+
+BRANCH="$(resolve_branch)"
 
 echo "[autopull] watching origin/$BRANCH every ${INTERVAL}s in $REPO_DIR"
 

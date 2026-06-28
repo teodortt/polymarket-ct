@@ -1,3 +1,22 @@
+const { execSync } = require("child_process");
+
+function resolveDeployBranch() {
+    if (process.env.DEPLOY_BRANCH) {
+        return process.env.DEPLOY_BRANCH;
+    }
+
+    try {
+        return execSync("git symbolic-ref --quiet --short HEAD", {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "ignore"],
+        }).trim();
+    } catch {
+        return undefined;
+    }
+}
+
+const deployBranch = resolveDeployBranch();
+
 module.exports = {
     apps: [
         {
@@ -23,7 +42,7 @@ module.exports = {
             watch: false,
             restart_delay: 10000,
             env: {
-                DEPLOY_BRANCH: "main",
+                ...(deployBranch ? { DEPLOY_BRANCH: deployBranch } : {}),
                 DEPLOY_POLL_INTERVAL: "60"
             },
             error_file: "./logs/autopull.error.log",
