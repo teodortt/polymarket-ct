@@ -46,16 +46,12 @@ ensure_app_running() {
   fi
 }
 
-LAST_BRANCH=""
+BRANCH="$(resolve_branch)"
+
+echo "[autopull] watching origin/$BRANCH every ${INTERVAL}s in $REPO_DIR"
 
 while true; do
   ensure_app_running
-  BRANCH="$(resolve_branch)"
-
-  if [ "$BRANCH" != "$LAST_BRANCH" ]; then
-    echo "[autopull] watching origin/$BRANCH every ${INTERVAL}s in $REPO_DIR"
-    LAST_BRANCH="$BRANCH"
-  fi
 
   if FETCH_ERR="$(git fetch --quiet origin "$BRANCH" 2>&1)"; then
     LOCAL="$(git rev-parse HEAD)"
