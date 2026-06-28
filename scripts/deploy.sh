@@ -16,7 +16,23 @@ export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 # shellcheck disable=SC1091
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 
-BRANCH="${DEPLOY_BRANCH:-main}"
+resolve_branch() {
+  if [ -n "${DEPLOY_BRANCH:-}" ]; then
+    printf '%s\n' "$DEPLOY_BRANCH"
+    return
+  fi
+
+  local current_branch
+  current_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  if [ -z "$current_branch" ]; then
+    echo ">>> Unable to determine current branch. Set DEPLOY_BRANCH explicitly." >&2
+    exit 1
+  fi
+
+  printf '%s\n' "$current_branch"
+}
+
+BRANCH="$(resolve_branch)"
 
 echo ">>> Fetching origin"
 git fetch --all --prune
