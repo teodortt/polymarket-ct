@@ -5,6 +5,35 @@ import { CopyTrader } from "./watcher";
 import { initTrader } from "./trader";
 import { WeatherEngine } from "./weather/engine";
 
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function launchTelegramOrThrow(tg: TelegramBot) {
+  const maxAttempts = 6;
+  const retryMs = 5000;
+  let lastErr: unknown;
+
+  for (let i = 1; i <= maxAttempts; i++) {
+    try {
+      await tg.launch();
+      console.log(`[Telegram] polling active (attempt ${i}/${maxAttempts})`);
+      return;
+    } catch (err) {
+      lastErr = err;
+      const msg = (err as any)?.message ?? String(err);
+      console.error(
+        `[Telegram] launch failed (attempt ${i}/${maxAttempts}): ${msg}`,
+      );
+      if (i < maxAttempts) await sleep(retryMs);
+    }
+  }
+
+  throw new Error(
+    `Telegram launch failed after ${maxAttempts} attempts: ${String((lastErr as any)?.message ?? lastErr)}`,
+  );
+}
+
 async function main() {
   // Apply WARP SOCKS5 proxy before any network calls
   if (config.proxyUrl) {
@@ -28,11 +57,10 @@ async function main() {
   // 2. Create CopyTrader — calls tg.register() internally (BEFORE launch)
   const bot = new CopyTrader(config.targetWallets, tg);
 
-  // 3. Launch Telegram bot AFTER register() is called
-  // In Telegraf v4, launch() blocks until the bot stops — do NOT await
-  tg.launch().catch((err: Error) =>
-    console.error("[Telegram] Launch error:", err.message),
-  );
+  // 3. Launch Telegram bot AFTER register() is called.
+  // Fail fast if polling can't start, so PM2 restarts instead of running
+  // in a "watcher alive, Telegram deaf" state.
+  await launchTelegramOrThrow(tg);
 
   // Give Telegram a moment to connect before polling starts
   await new Promise((r) => setTimeout(r, 1500));
