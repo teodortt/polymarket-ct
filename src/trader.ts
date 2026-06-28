@@ -7,7 +7,6 @@ import {
 } from "@polymarket/clob-client-v2";
 import { createWalletClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { polygon } from "viem/chains";
 import { config } from "./config";
 import { Trade, CopiedTrade, MarketInfo } from "./types";
 import { getMarketInfo } from "./polymarketApi";
@@ -68,7 +67,6 @@ async function createClient(mode: AuthMode): Promise<ClobClient> {
   const account = privateKeyToAccount(config.privateKey as `0x${string}`);
   const signer = createWalletClient({
     account,
-    chain: polygon,
     transport: http(process.env.RPC_URL || "https://polygon-rpc.com"),
   });
 
