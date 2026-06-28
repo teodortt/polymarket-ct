@@ -1659,6 +1659,8 @@ export class TelegramBot {
       `WEATHER_MIN_LIQUIDITY_USDC=\`${w.minLiquidityUsdc}\`\n` +
       `WEATHER_MAX_LIQUIDITY_FRACTION=\`${w.maxLiquidityFraction}\`\n` +
       `WEATHER_MIN_LEAD_DAYS=\`${w.minLeadDays}\`\n` +
+      `WEATHER_SAME_DAY_CUTOFF_HOUR=\`${w.sameDayCutoffHour}\`\n` +
+      `WEATHER_MIN_HOURS_TO_RESOLVE=\`${w.minHoursToResolve}\`\n` +
       `WEATHER_SPREAD_INFLATION=\`${w.spreadInflation}\`\n` +
       `WEATHER_KDE_BANDWIDTH_F=\`${w.kdeBandwidthF}\`\n` +
       `WEATHER_KDE_LEAD_PER_DAY_F=\`${w.kdeLeadPerDayF}\`\n` +
@@ -1766,6 +1768,28 @@ export class TelegramBot {
         w.minLeadDays = n;
         return { ok: true, msg: `WEATHER_MIN_LEAD_DAYS=${n}` };
       }
+      case "SAME_DAY_CUTOFF_HOUR": {
+        const n = parseNum();
+        if (n == null || n < 0 || n > 24) {
+          return {
+            ok: false,
+            msg: "WEATHER_SAME_DAY_CUTOFF_HOUR must be between 0 and 24.",
+          };
+        }
+        w.sameDayCutoffHour = n;
+        return { ok: true, msg: `WEATHER_SAME_DAY_CUTOFF_HOUR=${n}` };
+      }
+      case "MIN_HOURS_TO_RESOLVE": {
+        const n = parseNum();
+        if (n == null || n < 0) {
+          return {
+            ok: false,
+            msg: "WEATHER_MIN_HOURS_TO_RESOLVE must be >= 0.",
+          };
+        }
+        w.minHoursToResolve = n;
+        return { ok: true, msg: `WEATHER_MIN_HOURS_TO_RESOLVE=${n}` };
+      }
       case "SPREAD_INFLATION": {
         const n = parseNum();
         if (n == null || n < 1) {
@@ -1838,7 +1862,7 @@ export class TelegramBot {
       default:
         return {
           ok: false,
-          msg: "Unsupported key. Use one of: WEATHER_ENABLED, WEATHER_MIN_EDGE, WEATHER_MIN_PRICE, WEATHER_MAX_PRICE, WEATHER_MIN_LIQUIDITY_USDC, WEATHER_MAX_LIQUIDITY_FRACTION, WEATHER_MIN_LEAD_DAYS, WEATHER_SPREAD_INFLATION, WEATHER_KDE_BANDWIDTH_F, WEATHER_KDE_LEAD_PER_DAY_F, WEATHER_SCAN_INTERVAL_MS, WEATHER_MAX_TRADES_PER_SCAN, WEATHER_MAX_TRADES_PER_DAY, WEATHER_MODELS.",
+          msg: "Unsupported key. Use one of: WEATHER_ENABLED, WEATHER_MIN_EDGE, WEATHER_MIN_PRICE, WEATHER_MAX_PRICE, WEATHER_MIN_LIQUIDITY_USDC, WEATHER_MAX_LIQUIDITY_FRACTION, WEATHER_MIN_LEAD_DAYS, WEATHER_SAME_DAY_CUTOFF_HOUR, WEATHER_MIN_HOURS_TO_RESOLVE, WEATHER_SPREAD_INFLATION, WEATHER_KDE_BANDWIDTH_F, WEATHER_KDE_LEAD_PER_DAY_F, WEATHER_SCAN_INTERVAL_MS, WEATHER_MAX_TRADES_PER_SCAN, WEATHER_MAX_TRADES_PER_DAY, WEATHER_MODELS.",
         };
     }
   }
