@@ -327,6 +327,7 @@ export class TelegramBot {
   private weatherReport?: () => string | Promise<string>;
   // Optional reference to the weather engine (for exit commands).
   private weatherEngine?: {
+    getReport(): string | Promise<string>;
     getOpenPositions(): any[];
     maybeExitPosition(pos: any): Promise<void>;
   };
@@ -369,10 +370,15 @@ export class TelegramBot {
 
   // Inject the weather engine (for exit commands).
   setWeatherEngine(engine: {
+    getReport(): string | Promise<string>;
     getOpenPositions(): any[];
     maybeExitPosition(pos: any): Promise<void>;
   }) {
     this.weatherEngine = engine;
+    // Keep /weather operational even if the explicit provider hook was not set.
+    if (!this.weatherReport) {
+      this.weatherReport = () => engine.getReport();
+    }
   }
 
   private allowed(ctx: Context): boolean {
@@ -1623,7 +1629,10 @@ export class TelegramBot {
   // ─── Weather predictions ──────────────────────────────────────────────────────
   private async handleWeather(ctx: Context) {
     if (!this.allowed(ctx)) return;
-    if (!this.weatherReport) {
+    const reportProvider =
+      this.weatherReport ??
+      (this.weatherEngine ? () => this.weatherEngine!.getReport() : undefined);
+    if (!reportProvider) {
       return this.editOrReply(
         ctx,
         "🌦 *Weather module disabled.*\n\n" +
@@ -1631,7 +1640,7 @@ export class TelegramBot {
       );
     }
     try {
-      const text = await this.weatherReport();
+      const text = await reportProvider();
       this.editOrReply(ctx, text, this.refreshBtn("refresh:weather"));
     } catch (err: any) {
       this.editOrReply(ctx, `❌ Weather report failed: ${err?.message ?? err}`);
