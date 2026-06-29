@@ -51,6 +51,9 @@ while true; do
 
       CHANGED_FILES="$(git diff --name-only "$LOCAL" "$REMOTE" || true)"
       git reset --hard "origin/$BRANCH"
+      # Drop untracked files so upstream-added files never block the update.
+      # Ignored files (.env, data/) are preserved (no -x).
+      git clean -fd
 
       if echo "$CHANGED_FILES" | grep -E '^(package\.json|package-lock\.json|yarn\.lock|pnpm-lock\.yaml)$' >/dev/null; then
         echo "[autopull] dependency change, running install"

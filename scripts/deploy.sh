@@ -27,8 +27,12 @@ git fetch --all --prune
 
 PREV_SHA="$(git rev-parse HEAD)"
 
-echo ">>> Pulling latest for current branch: $BRANCH"
-git pull --ff-only origin "$BRANCH"
+echo ">>> Resetting to origin/$BRANCH"
+# Hard reset + clean so the pull never aborts on local/untracked file
+# collisions (e.g. new files added upstream that already exist locally).
+# -d removes untracked dirs; ignored files (.env, data/) are kept (no -x).
+git reset --hard "origin/$BRANCH"
+git clean -fd
 
 NEW_SHA="$(git rev-parse HEAD)"
 echo ">>> $PREV_SHA -> $NEW_SHA"
