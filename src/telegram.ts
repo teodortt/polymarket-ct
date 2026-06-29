@@ -332,6 +332,7 @@ export class TelegramBot {
     getOpenPositions(): any[];
     maybeExitPosition(pos: any): Promise<void>;
   };
+  private weatherInitPromise?: Promise<void>;
 
   constructor() {
     this.bot = new Telegraf(config.telegramBotToken);
@@ -381,6 +382,47 @@ export class TelegramBot {
     if (!this.weatherReport) {
       this.weatherReport = () => engine.getReport();
     }
+  }
+
+  // Defensive bootstrap: if startup wiring missed weather injection for any
+  // reason, lazily attach a WeatherEngine on first /weather use.
+  private async ensureWeatherRuntime() {
+    if (this.weatherEngine || this.weatherInitPromise) {
+      await this.weatherInitPromise;
+      return;
+    }
+    this.weatherInitPromise = (async () => {
+      try {
+        const { WeatherEngine } = await import("./weather/engine");
+        const engine = new WeatherEngine(
+          {
+            send: (text: string) => this.send(text),
+          },
+          {
+            getOrders: async () => {
+              try {
+                return this.getOrders ? await this.getOrders() : [];
+              } catch {
+                return [];
+              }
+            },
+          },
+        );
+        this.setWeatherEngine(engine);
+        engine
+          .start()
+          .catch((err: any) =>
+            console.error("[Weather] lazy engine error:", err?.message ?? err),
+          );
+        console.log("[Telegram] lazily initialized WeatherEngine");
+      } catch (err: any) {
+        console.error(
+          "[Telegram] failed to lazily initialize WeatherEngine:",
+          err?.message ?? err,
+        );
+      }
+    })();
+    await this.weatherInitPromise;
   }
 
   private allowed(ctx: Context): boolean {
@@ -757,11 +799,19 @@ export class TelegramBot {
       if (arg) {
         const enabled = parseBool(arg);
         if (enabled !== undefined) {
-          if (this.weatherEngine) this.weatherEngine.setEnabled(enabled);
-          else config.weather.enabled = enabled;
-          this.replyTo(
-            ctx,
-            `✅ WEATHER_ENABLED set to *${enabled}*\n\nUse /weathercfg to inspect current runtime values.`,
+          (async () => {
+            await this.ensureWeatherRuntime();
+            if (this.weatherEngine) this.weatherEngine.setEnabled(enabled);
+            else config.weather.enabled = enabled;
+            this.replyTo(
+              ctx,
+              `✅ WEATHER_ENABLED set to *${enabled}*\n\nUse /weathercfg to inspect current runtime values.`,
+            );
+          })().catch((err: any) =>
+            this.replyTo(
+              ctx,
+              `❌ Failed to set WEATHER_ENABLED: ${err?.message ?? err}`,
+            ),
           );
           return;
         }
@@ -1632,6 +1682,7 @@ export class TelegramBot {
   // ─── Weather predictions ──────────────────────────────────────────────────────
   private async handleWeather(ctx: Context) {
     if (!this.allowed(ctx)) return;
+    await this.ensureWeatherRuntime();
     const reportProvider =
       this.weatherReport ??
       (this.weatherEngine ? () => this.weatherEngine!.getReport() : undefined);
