@@ -41,9 +41,10 @@ function parseTargetWallets(): string[] {
 // WEATHER_ENABLED=true. Honors the global DRY_RUN flag for order placement.
 const weather: WeatherConfig = {
   enabled: process.env.WEATHER_ENABLED === "true",
-  // How often to rescan weather markets. Default 20 min — forecasts and order
-  // books move slowly, so frequent scans add little but API load.
-  scanIntervalMs: parseInt(process.env.WEATHER_SCAN_INTERVAL_MS || "1200000"),
+  // How often to rescan weather markets. 10 min — scanning twice as often
+  // catches fresh morning books (before the afternoon high locks) and gives
+  // genuine edges more chances to fire, at modest extra API load.
+  scanIntervalMs: parseInt(process.env.WEATHER_SCAN_INTERVAL_MS || "600000"),
   // Only trade events whose measurement day is within this many days. Near-term
   // forecasts are far more skillful, so keep this small.
   lookaheadDays: parseInt(process.env.WEATHER_LOOKAHEAD_DAYS || "3"),
@@ -53,9 +54,11 @@ const weather: WeatherConfig = {
     .map((s) => s.trim())
     .filter(Boolean),
   // Minimum edge (model probability − price paid) needed to fire a trade.
-  minEdge: parseFloat(process.env.WEATHER_MIN_EDGE || "0.08"),
-  // Fractional Kelly. 0.25 = quarter-Kelly (conservative, recommended).
-  kellyFraction: parseFloat(process.env.WEATHER_KELLY_FRACTION || "0.25"),
+  // Loosened 0.08→0.06 to surface more borderline-real edges.
+  minEdge: parseFloat(process.env.WEATHER_MIN_EDGE || "0.06"),
+  // Fractional Kelly. 0.35 = a more aggressive stake than quarter-Kelly while
+  // still well short of full-Kelly's ruin risk.
+  kellyFraction: parseFloat(process.env.WEATHER_KELLY_FRACTION || "0.35"),
   // Bankroll for Kelly sizing. 0 = auto (dry-run start balance / live USDC).
   bankrollUsdc: parseFloat(process.env.WEATHER_BANKROLL_USDC || "0"),
   maxTradeUsdc: parseFloat(process.env.WEATHER_MAX_TRADE_USDC || "20"),
@@ -66,9 +69,14 @@ const weather: WeatherConfig = {
       process.env.WEATHER_MAX_LIQ_FRACTION ||
       "0.02",
   ),
-  minLiquidityUsdc: parseFloat(process.env.WEATHER_MIN_LIQUIDITY_USDC || "250"),
-  // Ignore buys outside this price band (a "0.99 → 1.00" edge isn't tradeable).
-  minPrice: parseFloat(process.env.WEATHER_MIN_PRICE || "0.02"),
+  // Lowered 250→150 so thinner-but-live European/American afternoon books
+  // become eligible (they were just under the old floor).
+  minLiquidityUsdc: parseFloat(process.env.WEATHER_MIN_LIQUIDITY_USDC || "150"),
+  // Ignore buys outside this price band. Floor lowered 0.02→0.01 to admit 1–2¢
+  // model-edge buckets, but kept ABOVE the sub-cent (0.1–0.6¢) zone where the
+  // book is ≥99.9% certain against us — buying there is the documented
+  // money-loser (e.g. Seoul 30°C+ that settled −94.7%).
+  minPrice: parseFloat(process.env.WEATHER_MIN_PRICE || "0.01"),
   maxPrice: parseFloat(process.env.WEATHER_MAX_PRICE || "0.97"),
   // Discovery-time filter only (DISABLED by default). Polymarket sets every
   // event's `endDate` to 12:00 UTC of the measurement day regardless of city,
@@ -92,8 +100,8 @@ const weather: WeatherConfig = {
   sameDayCutoffHour: parseFloat(
     process.env.WEATHER_SAME_DAY_CUTOFF_HOUR || "16",
   ),
-  maxTradesPerScan: parseInt(process.env.WEATHER_MAX_TRADES_PER_SCAN || "3"),
-  maxTradesPerDay: parseInt(process.env.WEATHER_MAX_TRADES_PER_DAY || "20"),
+  maxTradesPerScan: parseInt(process.env.WEATHER_MAX_TRADES_PER_SCAN || "6"),
+  maxTradesPerDay: parseInt(process.env.WEATHER_MAX_TRADES_PER_DAY || "30"),
   // KDE smoothing over ensemble members (°F). Covers integer rounding,
   // station-vs-grid bias and known ensemble under-dispersion. Widened from the
   // original 1.0 — live scans showed true daily-max error of 2–3°C, far beyond
@@ -121,15 +129,20 @@ const weather: WeatherConfig = {
     process.env.WEATHER_SETTLE_YES_THRESHOLD || "0.9",
   ),
   // EMA weight for each new per-city bias sample (higher = adapts faster).
-  biasEmaAlpha: parseFloat(process.env.WEATHER_BIAS_EMA_ALPHA || "0.35"),
+  // Raised 0.35→0.5: live calibration shows large, swingy per-city errors
+  // (Seoul −4.9°C, Guangzhou +2.2°C in one day), so the learner must move
+  // faster to stop the model manufacturing phantom longshot edges.
+  biasEmaAlpha: parseFloat(process.env.WEATHER_BIAS_EMA_ALPHA || "0.5"),
   // Require this many scored samples before trusting/applying a city's bias.
   biasMinSamples: parseInt(process.env.WEATHER_BIAS_MIN_SAMPLES || "2"),
   // Clamp the learned correction so a bad sample can't wildly shift forecasts.
   maxCityBiasC: parseFloat(process.env.WEATHER_MAX_CITY_BIAS_C || "6"),
   // Hard capital-preservation cap: never stake more than this fraction of the
-  // bankroll on one event, regardless of what Kelly suggests. Default 5%.
+  // bankroll on one event, regardless of what Kelly suggests. Raised 5%→8% to
+  // deploy more capital per edge on a small live bankroll (this is the binding
+  // size cap when the bankroll is small).
   maxBankrollFractionPerEvent: parseFloat(
-    process.env.WEATHER_MAX_BANKROLL_FRACTION_PER_EVENT || "0.05",
+    process.env.WEATHER_MAX_BANKROLL_FRACTION_PER_EVENT || "0.08",
   ),
   // Settlement-lock detector thresholds (intraday, obs-grounded near-arb).
   lockMinProb: parseFloat(process.env.WEATHER_LOCK_MIN_PROB || "0.98"),
