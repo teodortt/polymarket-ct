@@ -13,7 +13,6 @@ import { getLiveUsdcBalance } from "./trader";
 // user-supplied arguments — completely free of command-injection surface.
 const PM2_APP = "polymarket-copybot";
 const APP_DIR = path.resolve(__dirname, "..");
-const DEPLOY_BRANCH = process.env.DEPLOY_BRANCH?.trim() || "v3";
 
 type AdminStep = { file: string; args: string[]; detached?: boolean };
 
@@ -32,27 +31,7 @@ type AdminCmd = {
 };
 
 const ADMIN_COMMANDS: Record<string, AdminCmd> = {
-  pull: {
-    label: `sync to origin/${DEPLOY_BRANCH}`,
-    file: "git",
-    args: ["fetch", "--prune", "origin", DEPLOY_BRANCH],
-    then: [
-      {
-        file: "git",
-        args: ["checkout", "-B", DEPLOY_BRANCH, `origin/${DEPLOY_BRANCH}`],
-      },
-      {
-        file: "git",
-        args: [
-          "branch",
-          "--set-upstream-to",
-          `origin/${DEPLOY_BRANCH}`,
-          DEPLOY_BRANCH,
-        ],
-      },
-      { file: "git", args: ["reset", "--hard", `origin/${DEPLOY_BRANCH}`] },
-    ],
-  },
+  pull: { label: "git pull", file: "git", args: ["pull", "--ff-only"] },
   gitstatus: { label: "git status", file: "git", args: ["status", "-sb"] },
   gitlog: {
     label: "git log -5",

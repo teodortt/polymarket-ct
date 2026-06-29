@@ -7,19 +7,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_DIR"
 
-BRANCH="${DEPLOY_BRANCH:-v3}"
 INTERVAL="${DEPLOY_POLL_INTERVAL:-60}"   # seconds
 APP_NAME="polymarket-copybot"
-
-ensure_branch_checked_out() {
-  local current
-  current="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo DETACHED)"
-  if [ "$current" != "$BRANCH" ]; then
-    echo "[autopull] branch drift detected: $current -> $BRANCH"
-    git checkout -B "$BRANCH" "origin/$BRANCH"
-  fi
-  git branch --set-upstream-to="origin/$BRANCH" "$BRANCH" >/dev/null 2>&1 || true
-}
 
 ensure_app_running() {
   # Keep the bot process alive even when git is unavailable or there are no new commits.
@@ -41,14 +30,19 @@ ensure_app_running() {
   fi
 }
 
-echo "[autopull] watching origin/$BRANCH every ${INTERVAL}s in $REPO_DIR"
+echo "[autopull] watching currently checked-out branch every ${INTERVAL}s in $REPO_DIR"
 
 while true; do
   ensure_app_running
 
-  if FETCH_ERR="$(git fetch --quiet origin "$BRANCH" 2>&1)"; then
-    ensure_branch_checked_out
+  BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
+  if [ "$BRANCH" = "HEAD" ]; then
+    echo "[autopull] detached HEAD; skipping cycle"
+    sleep "$INTERVAL"
+    continue
+  fi
 
+  if FETCH_ERR="$(git fetch --quiet origin "$BRANCH" 2>&1)"; then
     LOCAL="$(git rev-parse HEAD)"
     REMOTE="$(git rev-parse "origin/$BRANCH")"
 

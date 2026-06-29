@@ -23,7 +23,6 @@ module.exports = {
             watch: false,
             restart_delay: 10000,
             env: {
-                DEPLOY_BRANCH: "v3",
                 DEPLOY_POLL_INTERVAL: "60"
             },
             error_file: "./logs/autopull.error.log",
