@@ -13,6 +13,7 @@ import { getLiveUsdcBalance } from "./trader";
 // user-supplied arguments — completely free of command-injection surface.
 const PM2_APP = "polymarket-copybot";
 const APP_DIR = path.resolve(__dirname, "..");
+const DEPLOY_BRANCH = process.env.DEPLOY_BRANCH?.trim() || "v3";
 
 type AdminStep = { file: string; args: string[]; detached?: boolean };
 
@@ -31,7 +32,27 @@ type AdminCmd = {
 };
 
 const ADMIN_COMMANDS: Record<string, AdminCmd> = {
-  pull: { label: "git pull", file: "git", args: ["pull", "--ff-only"] },
+  pull: {
+    label: `sync to origin/${DEPLOY_BRANCH}`,
+    file: "git",
+    args: ["fetch", "--prune", "origin", DEPLOY_BRANCH],
+    then: [
+      {
+        file: "git",
+        args: ["checkout", "-B", DEPLOY_BRANCH, `origin/${DEPLOY_BRANCH}`],
+      },
+      {
+        file: "git",
+        args: [
+          "branch",
+          "--set-upstream-to",
+          `origin/${DEPLOY_BRANCH}`,
+          DEPLOY_BRANCH,
+        ],
+      },
+      { file: "git", args: ["reset", "--hard", `origin/${DEPLOY_BRANCH}`] },
+    ],
+  },
   gitstatus: { label: "git status", file: "git", args: ["status", "-sb"] },
   gitlog: {
     label: "git log -5",
@@ -74,19 +95,9 @@ const ADMIN_COMMANDS: Record<string, AdminCmd> = {
   uptime: { label: "uptime", file: "uptime", args: [] },
   disk: { label: "df -h", file: "df", args: ["-h"] },
   deploy: {
-    label: "git pull && npm install && pm2 reload",
-    file: "git",
-    args: ["pull", "--ff-only"],
-    then: [
-      { file: "npm", args: ["install", "--no-audit", "--no-fund"] },
-      // Final step must be detached — pm2 reload will SIGKILL this very
-      // process, which would otherwise kill the pm2 CLI child too.
-      {
-        file: "pm2",
-        args: ["reload", PM2_APP, "--update-env"],
-        detached: true,
-      },
-    ],
+    label: "branch-safe deploy script",
+    file: "bash",
+    args: ["./scripts/deploy.sh"],
     timeoutMs: 180_000,
   },
 };

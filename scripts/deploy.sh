@@ -23,6 +23,15 @@ git fetch --all --prune
 
 PREV_SHA="$(git rev-parse HEAD)"
 
+CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo DETACHED)"
+if [ "$CURRENT_BRANCH" != "$BRANCH" ]; then
+  echo ">>> Branch drift detected: $CURRENT_BRANCH -> $BRANCH"
+fi
+
+echo ">>> Checking out $BRANCH at origin/$BRANCH"
+git checkout -B "$BRANCH" "origin/$BRANCH"
+git branch --set-upstream-to="origin/$BRANCH" "$BRANCH" >/dev/null 2>&1 || true
+
 echo ">>> Resetting to origin/$BRANCH"
 git reset --hard "origin/$BRANCH"
 
