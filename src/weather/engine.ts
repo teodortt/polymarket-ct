@@ -148,7 +148,7 @@ export class WeatherEngine {
       return;
     }
     this.running = true;
-    if (this.cfg.enabled) {
+    if (config.weather.enabled) {
       console.log(
         `🌦  [Weather] started | every ${Math.round(this.cfg.scanIntervalMs / 60000)}m | ` +
           `lookahead ${this.cfg.lookaheadDays}d | minEdge ${(this.cfg.minEdge * 100).toFixed(0)}% | ` +
@@ -169,7 +169,7 @@ export class WeatherEngine {
 
     while (this.running) {
       try {
-        if (this.cfg.enabled) {
+        if (config.weather.enabled) {
           await this.scanOnce();
           // Opportunistically scan for exits
           if (this.cfg.exitEnabled && Date.now() >= nextExitScanAt) {
@@ -1011,11 +1011,17 @@ export class WeatherEngine {
     return formatReport(this.lastSignals, this.recentTrades(8), {
       markdown: true,
       lastScanAt: this.lastScanAt,
-      enabled: this.cfg.enabled,
+      enabled: config.weather.enabled,
       allWeatherTrades: this.activeTrades(),
       weatherPnL: pnlData,
       orders,
     });
+  }
+
+  // Keep runtime toggles in one place so Telegram and engine loops stay aligned.
+  setEnabled(enabled: boolean) {
+    this.cfg.enabled = enabled;
+    config.weather.enabled = enabled;
   }
 
   recentTrades(n: number): WeatherTradeRecord[] {

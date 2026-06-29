@@ -328,6 +328,7 @@ export class TelegramBot {
   // Optional reference to the weather engine (for exit commands).
   private weatherEngine?: {
     getReport(): string | Promise<string>;
+    setEnabled(enabled: boolean): void;
     getOpenPositions(): any[];
     maybeExitPosition(pos: any): Promise<void>;
   };
@@ -371,6 +372,7 @@ export class TelegramBot {
   // Inject the weather engine (for exit commands).
   setWeatherEngine(engine: {
     getReport(): string | Promise<string>;
+    setEnabled(enabled: boolean): void;
     getOpenPositions(): any[];
     maybeExitPosition(pos: any): Promise<void>;
   }) {
@@ -755,7 +757,8 @@ export class TelegramBot {
       if (arg) {
         const enabled = parseBool(arg);
         if (enabled !== undefined) {
-          config.weather.enabled = enabled;
+          if (this.weatherEngine) this.weatherEngine.setEnabled(enabled);
+          else config.weather.enabled = enabled;
           this.replyTo(
             ctx,
             `✅ WEATHER_ENABLED set to *${enabled}*\n\nUse /weathercfg to inspect current runtime values.`,
@@ -1640,7 +1643,14 @@ export class TelegramBot {
       );
     }
     try {
-      const text = await reportProvider();
+      const runtimeEnabled = config.weather.enabled;
+      let text = await reportProvider();
+      if (runtimeEnabled && text.includes("⏸ *Weather module is OFF*")) {
+        text =
+          "⚠️ *Weather runtime mismatch detected.* Toggle was set ON, but report returned OFF.\n" +
+          "This usually means another stale bot instance is replying or old code is still running.\n\n" +
+          text;
+      }
       this.editOrReply(ctx, text, this.refreshBtn("refresh:weather"));
     } catch (err: any) {
       this.editOrReply(ctx, `❌ Weather report failed: ${err?.message ?? err}`);
@@ -1700,7 +1710,8 @@ export class TelegramBot {
             msg: "Invalid boolean. Use true/false or on/off.",
           };
         }
-        w.enabled = b;
+        if (this.weatherEngine) this.weatherEngine.setEnabled(b);
+        else w.enabled = b;
         return { ok: true, msg: `WEATHER_ENABLED=${b}` };
       }
       case "MIN_EDGE": {
