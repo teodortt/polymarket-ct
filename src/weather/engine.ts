@@ -210,19 +210,6 @@ export class WeatherEngine {
     const signals: WeatherSignal[] = [];
     let placedThisScan = 0;
 
-    // Aggregate why nothing fired, so a 0-order scan is self-explaining in the
-    // logs (e.g. a stale server .env pinning minLeadDays, or just a settled
-    // board). Reasons are normalised so similar ones collapse into one count.
-    const blockerCounts = new Map<string, number>();
-    const noteBlocker = (reason: string) => {
-      const key = reason
-        .replace(/\$[0-9.]+/g, "$X")
-        .replace(/[0-9.]+¢/g, "X¢")
-        .replace(/-?[0-9.]+%/g, "X%")
-        .replace(/lead \d+d/g, "lead Nd");
-      blockerCounts.set(key, (blockerCounts.get(key) ?? 0) + 1);
-    };
-
     for (const event of events) {
       try {
         const geo = await resolveCity(event.city);
@@ -265,17 +252,13 @@ export class WeatherEngine {
         }
         this.learnFromEvent(event, signal, realized);
 
-        if (place) {
-          const atCap =
-            placedThisScan >= this.cfg.maxTradesPerScan ||
-            this.tradesToday() >= this.cfg.maxTradesPerDay;
-          if (atCap) {
-            noteBlocker("per-scan/day trade cap reached");
-          } else {
-            const { acted, reason } = await this.maybeTrade(signal, bankroll);
-            if (acted) placedThisScan++;
-            else if (reason) noteBlocker(reason);
-          }
+        if (
+          place &&
+          placedThisScan < this.cfg.maxTradesPerScan &&
+          this.tradesToday() < this.cfg.maxTradesPerDay
+        ) {
+          const acted = await this.maybeTrade(signal, bankroll);
+          if (acted) placedThisScan++;
         }
       } catch (err: any) {
         console.error(
@@ -283,17 +266,6 @@ export class WeatherEngine {
         );
       }
       await sleep(1_500); // rate-limit buffer for Open-Meteo API
-    }
-
-    if (place && placedThisScan === 0 && events.length > 0) {
-      const summary =
-        [...blockerCounts.entries()]
-          .sort((a, b) => b[1] - a[1])
-          .map(([reason, n]) => `${n}× ${reason}`)
-          .join("; ") || "no candidates";
-      console.log(`[Weather] no orders placed — blockers: ${summary}`);
-    } else if (place) {
-      console.log(`[Weather] placed ${placedThisScan} order(s) this scan.`);
     }
 
     this.lastSignals = signals;
@@ -305,23 +277,13 @@ export class WeatherEngine {
   private async maybeTrade(
     signal: WeatherSignal,
     bankroll: number,
-  ): Promise<{ acted: boolean; reason?: string }> {
+  ): Promise<boolean> {
     const best = signal.best;
-    if (!best || best.buyPrice == null) {
-      return {
-        acted: false,
-        reason: signal.bestRejectionReason ?? "no actionable bucket",
-      };
-    }
+    if (!best || best.buyPrice == null) return false;
 
     // Never trade essentially-settled, same-day outcomes — the book already
     // knows the realized high while the forecast still shows its prior guess.
-    if (signal.forecast.leadDays < this.cfg.minLeadDays) {
-      return {
-        acted: false,
-        reason: `lead ${signal.forecast.leadDays}d < minLeadDays ${this.cfg.minLeadDays}`,
-      };
-    }
+    if (signal.forecast.leadDays < this.cfg.minLeadDays) return false;
 
     // Same-day (lead 0) markets are tradeable while the day's high is still
     // uncertain, but once the city is past its afternoon heating peak the high
@@ -340,12 +302,7 @@ export class WeatherEngine {
         localDate > signal.event.targetDate ||
         (localDate === signal.event.targetDate &&
           localHour >= this.cfg.sameDayCutoffHour);
-      if (onOrAfterPeak) {
-        return {
-          acted: false,
-          reason: `same-day past local cutoff ${this.cfg.sameDayCutoffHour}h`,
-        };
-      }
+      if (onOrAfterPeak) return false;
     }
 
     const bucket = best.bucket;
@@ -354,12 +311,10 @@ export class WeatherEngine {
     if (
       this.hasOpenPositionForEvent(signal.event.city, signal.event.targetDate)
     ) {
-      return { acted: false, reason: "open position already for city+date" };
+      return false;
     }
     // Already traded this bucket today — don't stack.
-    if (this.tradedTokens().includes(bucket.tokenIdYes)) {
-      return { acted: false, reason: "bucket already traded today" };
-    }
+    if (this.tradedTokens().includes(bucket.tokenIdYes)) return false;
 
     // Kelly-sized notional, capped by config and available liquidity.
     const frac = best.kellyFraction * this.cfg.kellyFraction;
@@ -373,12 +328,7 @@ export class WeatherEngine {
       bucket.liquidity * this.cfg.maxLiquidityFraction,
     );
     notional = Math.floor(notional * 100) / 100;
-    if (notional < this.cfg.minTradeUsdc) {
-      return {
-        acted: false,
-        reason: `notional $${notional.toFixed(2)} < minTrade $${this.cfg.minTradeUsdc}`,
-      };
-    }
+    if (notional < this.cfg.minTradeUsdc) return false;
 
     // Limit price: cross the spread slightly for fill, but never above fair
     // value (model prob) or the configured ceiling.
@@ -433,13 +383,7 @@ export class WeatherEngine {
     this.recordTrade(rec);
 
     await this.notifyTrade(signal, rec);
-    const acted = result.status === "PLACED" || result.status === "DRY_RUN";
-    return {
-      acted,
-      reason: acted
-        ? undefined
-        : `order ${result.status}${result.reason ? `: ${result.reason}` : ""}`,
-    };
+    return result.status === "PLACED" || result.status === "DRY_RUN";
   }
 
   // ── exit management ──────────────────────────────────────────────────────────
