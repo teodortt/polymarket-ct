@@ -4,7 +4,7 @@ import { ForecastSummary, GeoPoint, TempUnit, WeatherConfig } from "../types";
 const ENSEMBLE_API = "https://ensemble-api.open-meteo.com/v1/ensemble";
 const FORECAST_API = "https://api.open-meteo.com/v1/forecast";
 
-const RETRY_DELAYS_MS = [2_000, 5_000, 15_000]; // back-off schedule for 429s
+const RETRY_DELAYS_MS = [2_000, 5_000, 15_000]; // back-off schedule for transient errors
 
 async function axiosGetWithRetry(
   url: string,
@@ -18,10 +18,16 @@ async function axiosGetWithRetry(
     } catch (err: any) {
       lastErr = err;
       const status = err?.response?.status;
-      if (status === 429 && attempt < RETRY_DELAYS_MS.length) {
+      // 429 = rate-limited. Don't retry — it's a signal to back off globally.
+      // Retrying here just amplifies load and creates cascading failures.
+      if (status === 429) {
+        throw err;
+      }
+      // Only retry on transient errors: timeouts, 5xx, connection errors, etc.
+      if (attempt < RETRY_DELAYS_MS.length && (!status || status >= 500)) {
         const delay = RETRY_DELAYS_MS[attempt];
         console.warn(
-          `[Weather] rate-limited (429) — retrying in ${delay / 1000}s (attempt ${attempt + 1}/${RETRY_DELAYS_MS.length})`,
+          `[Weather] transient error (${status || "timeout"}) — retrying in ${delay / 1000}s (attempt ${attempt + 1}/${RETRY_DELAYS_MS.length})`,
         );
         await new Promise((r) => setTimeout(r, delay));
         continue;
