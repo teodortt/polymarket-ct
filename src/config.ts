@@ -2,18 +2,7 @@ import * as dotenv from "dotenv";
 import { resolve } from "path";
 
 // Load .env from the repo root regardless of PM2/process working directory.
-const envResult = dotenv.config({ path: resolve(__dirname, "../.env") });
-
-// PM2 can keep stale env snapshots across restarts/reloads. By default dotenv
-// does not override existing process.env keys, so old WEATHER_* values may
-// survive even after editing .env. Force .env precedence for weather knobs.
-if (envResult.parsed) {
-  for (const [k, v] of Object.entries(envResult.parsed)) {
-    if (k.startsWith("WEATHER_")) {
-      process.env[k] = v;
-    }
-  }
-}
+dotenv.config({ path: resolve(__dirname, "../.env") });
 
 import { WeatherConfig } from "./types";
 
