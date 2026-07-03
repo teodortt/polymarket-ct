@@ -10,7 +10,8 @@
     "watch": "ts-node-dev --respawn src/index.ts",
     "test:copy-one": "node scripts/testCopyOne.js",
     "weather:scan": "ts-node src/weather/cli.ts",
-    "env:sync": "node scripts/syncEnvFromExample.js"
+    "env:sync": "node scripts/syncEnvFromExample.js",
+    "pm2:restart": "pm2 delete polymarket-copybot && pm2 start ecosystem.config.js --only polymarket-copybot"
   },
   "dependencies": {
     "@polymarket/clob-client-v2": "^1.0.6",
