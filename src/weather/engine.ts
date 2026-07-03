@@ -210,9 +210,24 @@ export class WeatherEngine {
     const signals: WeatherSignal[] = [];
     let placedThisScan = 0;
 
+    // Per-scan caches: avoid re-fetching the same city geocode or the same
+    // (city, unit, targetDate) forecast when multiple market buckets share
+    // the same underlying data point. Each unique combination fires exactly
+    // one pair of HTTP requests instead of one per market bucket.
+    const geoCache = new Map<string, ReturnType<typeof resolveCity>>();
+    const forecastCache = new Map<
+      string,
+      ReturnType<typeof buildForecastDistribution>
+    >();
+
     for (const event of events) {
       try {
-        const geo = await resolveCity(event.city);
+        let geoPromise = geoCache.get(event.city);
+        if (!geoPromise) {
+          geoPromise = resolveCity(event.city);
+          geoCache.set(event.city, geoPromise);
+        }
+        const geo = await geoPromise;
         if (!geo) {
           console.warn(`[Weather] no coordinates for "${event.city}" — skip.`);
           continue;
@@ -223,14 +238,20 @@ export class WeatherEngine {
           event.unit,
           leadDaysUntil(event.targetDate),
         );
-        const forecast = await buildForecastDistribution(
-          geo,
-          event.unit,
-          event.targetDate,
-          this.cfg,
-          biasOffset,
-          sigmaFloor,
-        );
+        const forecastKey = `${event.city}|${event.unit}|${event.targetDate}`;
+        let forecastPromise = forecastCache.get(forecastKey);
+        if (!forecastPromise) {
+          forecastPromise = buildForecastDistribution(
+            geo,
+            event.unit,
+            event.targetDate,
+            this.cfg,
+            biasOffset,
+            sigmaFloor,
+          );
+          forecastCache.set(forecastKey, forecastPromise);
+        }
+        const forecast = await forecastPromise;
         if (!forecast) continue;
 
         const signal = predictEvent(event, geo, forecast, this.cfg);
