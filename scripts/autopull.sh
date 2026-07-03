@@ -62,7 +62,9 @@ while true; do
       git reset --hard "origin/$BRANCH"
 
       if echo "$CHANGED_FILES" | grep -E '^(package\.json|package-lock\.json|yarn\.lock|pnpm-lock\.yaml)$' >/dev/null; then
-        echo "[autopull] dependency change, running install"
+        echo "[autopull] dependency change, stopping $APP_NAME before install (avoids MODULE_NOT_FOUND race on a partially-written node_modules if PM2 auto-restarts mid-install)"
+        pm2 stop "$APP_NAME" >/dev/null 2>&1 || true
+        echo "[autopull] running install"
         if [ -f package-lock.json ]; then
           npm ci || npm install
         else

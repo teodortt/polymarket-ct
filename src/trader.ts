@@ -7,7 +7,6 @@ import {
 } from "@polymarket/clob-client-v2";
 import { createWalletClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { polygon } from "viem/chains";
 import { config } from "./config";
 import { Trade, CopiedTrade, MarketInfo } from "./types";
 import { getMarketInfo } from "./polymarketApi";
@@ -66,9 +65,12 @@ function getFallbackAuthModes(): AuthMode[] {
 
 async function createClient(mode: AuthMode): Promise<ClobClient> {
   const account = privateKeyToAccount(config.privateKey as `0x${string}`);
+  // NOTE: intentionally no `chain` here (transport-only). Importing `viem/chains`
+  // eagerly loads every chain definition (including tempo.js) and has crashed
+  // with MODULE_NOT_FOUND on some Termux installs where those files are missing.
+  // We only need EIP-712 signing here, not on-chain RPC calls, so chain is unneeded.
   const signer = createWalletClient({
     account,
-    chain: polygon,
     transport: http(process.env.RPC_URL || "https://polygon-rpc.com"),
   });
 

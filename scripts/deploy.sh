@@ -31,6 +31,8 @@ echo ">>> $PREV_SHA -> $NEW_SHA"
 
 # Install deps only if package.json or lockfile changed (or first deploy).
 if [ "$PREV_SHA" = "$NEW_SHA" ] || git diff --name-only "$PREV_SHA" "$NEW_SHA" | grep -E '^(package\.json|package-lock\.json|yarn\.lock|pnpm-lock\.yaml)$' >/dev/null; then
+  echo ">>> Stopping polymarket-copybot before install (avoids MODULE_NOT_FOUND race on a partially-written node_modules if PM2 auto-restarts mid-install)"
+  pm2 stop polymarket-copybot >/dev/null 2>&1 || true
   echo ">>> Installing dependencies"
   if [ -f package-lock.json ]; then
     npm ci
