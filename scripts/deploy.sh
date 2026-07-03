@@ -46,7 +46,12 @@ RECREATE_SCRIPT="$REPO_DIR/scripts/pm2-recreate-copybot.sh"
 
 if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
   echo ">>> Recreating $APP_NAME"
-  "$RECREATE_SCRIPT"
+  if [ -f "$RECREATE_SCRIPT" ]; then
+    bash "$RECREATE_SCRIPT" || pm2 start ecosystem.config.js --only "$APP_NAME"
+  else
+    echo ">>> Recreate helper not found at $RECREATE_SCRIPT, using ecosystem fallback"
+    pm2 start ecosystem.config.js --only "$APP_NAME"
+  fi
 else
   echo ">>> Starting $APP_NAME from ecosystem.config.js"
   pm2 start ecosystem.config.js --only "$APP_NAME"

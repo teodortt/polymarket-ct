@@ -17,11 +17,20 @@ INTERVAL="${DEPLOY_POLL_INTERVAL:-60}"   # seconds
 APP_NAME="polymarket-copybot"
 RECREATE_SCRIPT="$REPO_DIR/scripts/pm2-recreate-copybot.sh"
 
+recreate_app() {
+  if [ -f "$RECREATE_SCRIPT" ]; then
+    bash "$RECREATE_SCRIPT" || pm2 start ecosystem.config.js --only "$APP_NAME"
+  else
+    echo "[autopull] recreate script missing at $RECREATE_SCRIPT, using ecosystem fallback"
+    pm2 start ecosystem.config.js --only "$APP_NAME"
+  fi
+}
+
 ensure_app_running() {
   # Keep the bot process alive even when git is unavailable or there are no new commits.
   if ! pm2 describe "$APP_NAME" >/dev/null 2>&1; then
     echo "[autopull] $APP_NAME missing in PM2, recreating"
-    "$RECREATE_SCRIPT" || pm2 start ecosystem.config.js --only "$APP_NAME"
+    recreate_app
     pm2 save >/dev/null 2>&1 || true
     return
   fi
@@ -30,7 +39,7 @@ ensure_app_running() {
   pid="$(pm2 pid "$APP_NAME" 2>/dev/null | tr -d '[:space:]')"
   if [ -z "$pid" ] || [ "$pid" = "0" ]; then
     echo "[autopull] $APP_NAME not online, recreating"
-    "$RECREATE_SCRIPT" || \
+    recreate_app || \
       pm2 start "$APP_NAME" || \
       pm2 start ecosystem.config.js --only "$APP_NAME"
     pm2 save >/dev/null 2>&1 || true
@@ -62,7 +71,7 @@ while true; do
       fi
 
       echo "[autopull] recreating $APP_NAME"
-      "$RECREATE_SCRIPT" || pm2 start ecosystem.config.js --only "$APP_NAME"
+      recreate_app
       pm2 save >/dev/null 2>&1 || true
     fi
   else
