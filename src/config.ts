@@ -98,7 +98,7 @@ const weather: WeatherConfig = {
   // locked. Local time is derived from longitude (±1h — fine for this), so no
   // timezone data is needed. Set 24 to allow same-day trading all day long.
   sameDayCutoffHour: parseFloat(
-    process.env.WEATHER_SAME_DAY_CUTOFF_HOUR || "16",
+    process.env.WEATHER_SAME_DAY_CUTOFF_HOUR || "24",
   ),
   maxTradesPerScan: parseInt(process.env.WEATHER_MAX_TRADES_PER_SCAN || "6"),
   maxTradesPerDay: parseInt(process.env.WEATHER_MAX_TRADES_PER_DAY || "30"),
