@@ -21,9 +21,7 @@ type AdminCmd = {
   file: string;
   args: string[];
   // If true, spawn detached so the child survives this process being killed
-  // (needed for `pm2 reload/restart` of THIS app — pm2 sends SIGKILL to the
-  // whole process group, which would otherwise take out the pm2 CLI child too
-  // and surface as `[exit ?] Command failed` in Telegram).
+  // (needed for actions that stop/recreate THIS app via pm2).
   detached?: boolean;
   // Optional follow-up commands executed sequentially (e.g. deploy chain).
   then?: AdminStep[];
@@ -38,16 +36,10 @@ const ADMIN_COMMANDS: Record<string, AdminCmd> = {
     file: "git",
     args: ["log", "--oneline", "-n", "5"],
   },
-  reload: {
-    label: `pm2 reload ${PM2_APP}`,
-    file: "pm2",
-    args: ["reload", PM2_APP, "--update-env"],
-    detached: true,
-  },
   restart: {
-    label: `pm2 restart ${PM2_APP}`,
-    file: "pm2",
-    args: ["restart", PM2_APP, "--update-env"],
+    label: `pm2 recreate ${PM2_APP}`,
+    file: "bash",
+    args: ["./scripts/pm2-recreate-copybot.sh"],
     detached: true,
   },
   stopapp: {
@@ -1810,7 +1802,7 @@ export class TelegramBot {
       await this.bot.telegram
         .sendMessage(
           chatId,
-          "♻️ pm2 reload launched detached — the bot will restart shortly.",
+          "♻️ pm2 recreate launched detached — the bot will restart shortly.",
         )
         .catch(() => {});
     }
