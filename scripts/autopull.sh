@@ -16,7 +16,7 @@ ensure_app_running() {
   # Keep the bot process alive even when git is unavailable or there are no new commits.
   if ! pm2 describe "$APP_NAME" >/dev/null 2>&1; then
     echo "[autopull] $APP_NAME missing in PM2, recreating"
-    "$RECREATE_SCRIPT" || pm2 start ecosystem.config.js --only "$APP_NAME" || pm2 start ecosystem.config.js
+    "$RECREATE_SCRIPT" || pm2 start ecosystem.config.js --only "$APP_NAME"
     pm2 save >/dev/null 2>&1 || true
     return
   fi
@@ -57,7 +57,7 @@ while true; do
       fi
 
       echo "[autopull] recreating $APP_NAME"
-      "$RECREATE_SCRIPT" || pm2 start ecosystem.config.js --only "$APP_NAME" || pm2 start ecosystem.config.js
+      "$RECREATE_SCRIPT" || pm2 start ecosystem.config.js --only "$APP_NAME"
       pm2 save >/dev/null 2>&1 || true
     fi
   else

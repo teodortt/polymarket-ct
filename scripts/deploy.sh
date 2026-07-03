@@ -42,13 +42,14 @@ else
 fi
 
 APP_NAME="polymarket-copybot"
+RECREATE_SCRIPT="$REPO_DIR/scripts/pm2-recreate-copybot.sh"
 
 if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
-  echo ">>> Reloading $APP_NAME"
-  pm2 reload "$APP_NAME" --update-env
+  echo ">>> Recreating $APP_NAME"
+  "$RECREATE_SCRIPT"
 else
   echo ">>> Starting $APP_NAME from ecosystem.config.js"
-  pm2 start ecosystem.config.js
+  pm2 start ecosystem.config.js --only "$APP_NAME"
 fi
 
 pm2 save >/dev/null 2>&1 || true
