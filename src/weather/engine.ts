@@ -37,12 +37,26 @@ interface WeatherPnLByDate {
   totalTrades: number;
 }
 
+interface TradeDecision {
+  acted: boolean;
+  reason?: string;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
 function todayStr(ts = Date.now()): string {
   return new Date(ts).toISOString().slice(0, 10);
+}
+
+function localDateAndHourFromLon(lon: number): { date: string; hour: number } {
+  // Approximate local civil time by longitude offset when timezone is unknown.
+  const shifted = new Date(Date.now() + (lon / 15) * 3_600_000);
+  return {
+    date: shifted.toISOString().slice(0, 10),
+    hour: shifted.getUTCHours(),
+  };
 }
 
 function tradeExecutionMode(trade: WeatherTradeRecord): "DRY_RUN" | "LIVE" {
@@ -118,13 +132,20 @@ export class WeatherEngine {
     const events = await discoverTemperatureEvents({
       lookaheadDays: this.cfg.lookaheadDays,
       cities: this.cfg.cities,
-      minHoursToResolve: this.cfg.minHoursToResolve,
+      // Keep near-settlement events visible for diagnostics/calibration.
+      minHoursToResolve: 0,
     });
     console.log(`[Weather] scan: ${events.length} event(s) in window.`);
 
     const bankroll = place ? await this.resolveBankroll() : 0;
     const signals: WeatherSignal[] = [];
     let placedThisScan = 0;
+    const blockers = new Map<string, number>();
+
+    const noteBlocker = (reason?: string) => {
+      if (!reason) return;
+      blockers.set(reason, (blockers.get(reason) ?? 0) + 1);
+    };
 
     for (const event of events) {
       try {
@@ -149,8 +170,12 @@ export class WeatherEngine {
           placedThisScan < this.cfg.maxTradesPerScan &&
           this.tradesToday() < this.cfg.maxTradesPerDay
         ) {
-          const acted = await this.maybeTrade(signal, bankroll);
-          if (acted) placedThisScan++;
+          const decision = await this.maybeTrade(signal, bankroll);
+          if (decision.acted) {
+            placedThisScan++;
+          } else {
+            noteBlocker(decision.reason);
+          }
         }
       } catch (err: any) {
         console.error(
@@ -162,6 +187,19 @@ export class WeatherEngine {
 
     this.lastSignals = signals;
     this.lastScanAt = Date.now();
+    if (place) {
+      if (placedThisScan > 0) {
+        console.log(`[Weather] placed ${placedThisScan} order(s) this scan.`);
+      } else if (blockers.size > 0) {
+        const summary = [...blockers.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .map(([k, v]) => `${v}x ${k}`)
+          .join("; ");
+        console.log(`[Weather] no orders placed — blockers: ${summary}`);
+      } else {
+        console.log("[Weather] no orders placed.");
+      }
+    }
     return signals;
   }
 
@@ -169,13 +207,46 @@ export class WeatherEngine {
   private async maybeTrade(
     signal: WeatherSignal,
     bankroll: number,
-  ): Promise<boolean> {
+  ): Promise<TradeDecision> {
     const best = signal.best;
-    if (!best || best.buyPrice == null) return false;
+    if (!best || best.buyPrice == null) {
+      return {
+        acted: false,
+        reason: signal.bestRejectionReason ?? "no best bucket",
+      };
+    }
+
+    if (signal.forecast.leadDays < this.cfg.minLeadDays) {
+      return {
+        acted: false,
+        reason: `lead ${signal.forecast.leadDays}d < minLeadDays ${this.cfg.minLeadDays}`,
+      };
+    }
+
+    if (signal.forecast.leadDays === 0) {
+      const local = localDateAndHourFromLon(signal.geo.lon);
+      if (local.date > signal.event.targetDate) {
+        return {
+          acted: false,
+          reason: `local date ${local.date} past target ${signal.event.targetDate}`,
+        };
+      }
+      if (
+        local.date === signal.event.targetDate &&
+        local.hour >= this.cfg.sameDayCutoffHour
+      ) {
+        return {
+          acted: false,
+          reason: `local hour ${local.hour} >= cutoff ${this.cfg.sameDayCutoffHour}`,
+        };
+      }
+    }
 
     const bucket = best.bucket;
     // Already traded this bucket today — don't stack.
-    if (this.tradedTokens().includes(bucket.tokenIdYes)) return false;
+    if (this.tradedTokens().includes(bucket.tokenIdYes)) {
+      return { acted: false, reason: "already traded token today" };
+    }
 
     // Kelly-sized notional, capped by config and available liquidity.
     const frac = best.kellyFraction * this.cfg.kellyFraction;
@@ -186,7 +257,12 @@ export class WeatherEngine {
       bucket.liquidity * this.cfg.maxLiquidityFraction,
     );
     notional = Math.floor(notional * 100) / 100;
-    if (notional < this.cfg.minTradeUsdc) return false;
+    if (notional < this.cfg.minTradeUsdc) {
+      return {
+        acted: false,
+        reason: `notional $${notional.toFixed(2)} < minTrade $${this.cfg.minTradeUsdc.toFixed(2)}`,
+      };
+    }
 
     // Limit price: cross the spread slightly for fill, but never above fair
     // value (model prob) or the configured ceiling.
@@ -241,7 +317,15 @@ export class WeatherEngine {
     this.recordTrade(rec);
 
     await this.notifyTrade(signal, rec);
-    return result.status === "PLACED" || result.status === "DRY_RUN";
+    if (result.status === "PLACED" || result.status === "DRY_RUN") {
+      return { acted: true };
+    }
+    return {
+      acted: false,
+      reason: result.reason
+        ? `${result.status.toLowerCase()}: ${result.reason}`
+        : result.status.toLowerCase(),
+    };
   }
 
   // ── bankroll / accounting ─────────────────────────────────────────────────────

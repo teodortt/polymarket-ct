@@ -57,7 +57,7 @@ export function predictEvent(
 
   signals.sort((a, b) => b.modelProb - a.modelProb);
 
-  const best = pickBest(signals, cfg);
+  const { best, reason } = pickBest(signals, cfg);
 
   return {
     event,
@@ -65,6 +65,7 @@ export function predictEvent(
     forecast: summary,
     buckets: signals,
     best,
+    bestRejectionReason: reason,
     generatedAt: Date.now(),
   };
 }
@@ -74,15 +75,34 @@ export function predictEvent(
 function pickBest(
   signals: BucketSignal[],
   cfg: WeatherConfig,
-): BucketSignal | null {
+): { best: BucketSignal | null; reason?: string } {
   let best: BucketSignal | null = null;
+  let firstReason: string | undefined;
   for (const s of signals) {
-    if (!s.bucket.acceptingOrders) continue;
-    if (s.buyPrice == null) continue;
-    if (s.buyPrice < cfg.minPrice || s.buyPrice > cfg.maxPrice) continue;
-    if (s.bucket.liquidity < cfg.minLiquidityUsdc) continue;
-    if (s.edge < cfg.minEdge) continue;
+    let reason: string | undefined;
+    if (!s.bucket.acceptingOrders) {
+      reason = "bucket not accepting orders";
+    } else if (s.buyPrice == null) {
+      reason = "no best ask";
+    } else if (s.buyPrice < cfg.minPrice) {
+      reason = `ask ${s.buyPrice.toFixed(3)} < minPrice ${cfg.minPrice.toFixed(3)}`;
+    } else if (s.buyPrice > cfg.maxPrice) {
+      reason = `ask ${s.buyPrice.toFixed(3)} > maxPrice ${cfg.maxPrice.toFixed(3)}`;
+    } else if (s.bucket.liquidity < cfg.minLiquidityUsdc) {
+      reason = `liquidity ${s.bucket.liquidity.toFixed(0)} < minLiquidity ${cfg.minLiquidityUsdc.toFixed(0)}`;
+    } else if (s.edge < cfg.minEdge) {
+      reason = `edge ${(s.edge * 100).toFixed(1)}% < minEdge ${(cfg.minEdge * 100).toFixed(1)}%`;
+    }
+
+    if (reason) {
+      if (!firstReason) firstReason = `${s.bucket.label}: ${reason}`;
+      continue;
+    }
+
     if (best == null || s.edge > best.edge) best = s;
   }
-  return best;
+  return {
+    best,
+    reason: best ? undefined : (firstReason ?? "no actionable bucket"),
+  };
 }

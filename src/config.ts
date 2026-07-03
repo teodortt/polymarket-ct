@@ -43,17 +43,22 @@ const weather: WeatherConfig = {
   enabled: process.env.WEATHER_ENABLED === "true",
   // How often to rescan weather markets. Default 20 min — forecasts and order
   // books move slowly, so frequent scans add little but API load.
-  scanIntervalMs: parseInt(process.env.WEATHER_SCAN_INTERVAL_MS || "1200000"),
+  scanIntervalMs: parseInt(process.env.WEATHER_SCAN_INTERVAL_MS || "600000"),
   // Only trade events whose measurement day is within this many days. Near-term
   // forecasts are far more skillful, so keep this small.
   lookaheadDays: parseInt(process.env.WEATHER_LOOKAHEAD_DAYS || "3"),
+  // Allow same-day trading (lead 0) by default; same-day time risk is managed
+  // by `sameDayCutoffHour` instead of event endDate.
+  minLeadDays: parseInt(process.env.WEATHER_MIN_LEAD_DAYS || "0"),
+  // Stop opening new same-day positions once local afternoon is mostly done.
+  sameDayCutoffHour: parseInt(process.env.WEATHER_SAME_DAY_CUTOFF_HOUR || "16"),
   // Comma-separated case-insensitive city filter. Empty = every city found.
   cities: (process.env.WEATHER_CITIES || "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean),
   // Minimum edge (model probability − price paid) needed to fire a trade.
-  minEdge: parseFloat(process.env.WEATHER_MIN_EDGE || "0.08"),
+  minEdge: parseFloat(process.env.WEATHER_MIN_EDGE || "0.06"),
   // Fractional Kelly. 0.25 = quarter-Kelly (conservative, recommended).
   kellyFraction: parseFloat(process.env.WEATHER_KELLY_FRACTION || "0.25"),
   // Bankroll for Kelly sizing. 0 = auto (dry-run start balance / live USDC).
@@ -66,21 +71,19 @@ const weather: WeatherConfig = {
       process.env.WEATHER_MAX_LIQ_FRACTION ||
       "0.02",
   ),
-  minLiquidityUsdc: parseFloat(process.env.WEATHER_MIN_LIQUIDITY_USDC || "250"),
+  minLiquidityUsdc: parseFloat(process.env.WEATHER_MIN_LIQUIDITY_USDC || "150"),
   // Ignore buys outside this price band (a "0.99 → 1.00" edge isn't tradeable).
-  minPrice: parseFloat(process.env.WEATHER_MIN_PRICE || "0.02"),
+  minPrice: parseFloat(process.env.WEATHER_MIN_PRICE || "0.01"),
   maxPrice: parseFloat(process.env.WEATHER_MAX_PRICE || "0.97"),
-  // Skip events resolving within this many hours. Near settlement the realized
-  // high is often already known to the market while the forecast still shows
-  // its pre-day prediction — trading that divergence is a trap, not an edge.
+  // Keep discovery broad; a same-day local-time cutoff is applied at trade-time.
   minHoursToResolve: parseFloat(
-    process.env.WEATHER_MIN_HOURS_TO_RESOLVE || "6",
+    process.env.WEATHER_MIN_HOURS_TO_RESOLVE || "0",
   ),
-  maxTradesPerScan: parseInt(process.env.WEATHER_MAX_TRADES_PER_SCAN || "3"),
-  maxTradesPerDay: parseInt(process.env.WEATHER_MAX_TRADES_PER_DAY || "20"),
+  maxTradesPerScan: parseInt(process.env.WEATHER_MAX_TRADES_PER_SCAN || "6"),
+  maxTradesPerDay: parseInt(process.env.WEATHER_MAX_TRADES_PER_DAY || "30"),
   // KDE smoothing over ensemble members (°F). Covers integer rounding,
   // station-vs-grid bias and known ensemble under-dispersion.
-  kdeBandwidthF: parseFloat(process.env.WEATHER_KDE_BANDWIDTH_F || "1.0"),
+  kdeBandwidthF: parseFloat(process.env.WEATHER_KDE_BANDWIDTH_F || "2.0"),
   kdeLeadPerDayF: parseFloat(process.env.WEATHER_KDE_LEAD_PER_DAY_F || "0.25"),
   // Inflate ensemble spread around its mean (>=1) to improve calibration.
   spreadInflation: parseFloat(process.env.WEATHER_SPREAD_INFLATION || "1.1"),

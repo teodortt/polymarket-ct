@@ -50,6 +50,8 @@ export interface WeatherConfig {
   enabled: boolean;
   scanIntervalMs: number;
   lookaheadDays: number;
+  minLeadDays: number; // minimum forecast lead in days before placing orders
+  sameDayCutoffHour: number; // local-hour cutoff for lead-0 trading
   cities: string[]; // case-insensitive substring filter; empty = all
   minEdge: number; // min |model − market| probability to fire a trade
   kellyFraction: number; // fractional-Kelly scaler (0.25 = quarter Kelly)
@@ -143,6 +145,7 @@ export interface WeatherSignal {
   forecast: ForecastSummary;
   buckets: BucketSignal[]; // sorted by modelProb desc
   best: BucketSignal | null; // best actionable positive-edge bucket
+  bestRejectionReason?: string;
   generatedAt: number;
 }
 

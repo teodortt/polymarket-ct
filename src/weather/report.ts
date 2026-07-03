@@ -205,7 +205,9 @@ export function formatReport(
         `✅ Edge: ${b(s.best.bucket.label)} — model ${pct(s.best.modelProb)} vs ask ${pct(s.best.buyPrice)} = ${b("+" + pct(s.best.edge))} (Kelly ${pct(s.best.kellyFraction)})`,
       );
     } else {
-      lines.push(`— no bucket above the edge threshold`);
+      const reason =
+        s.bestRejectionReason ?? "no bucket above the edge threshold";
+      lines.push(`— no trade: ${reason}`);
     }
   }
 
