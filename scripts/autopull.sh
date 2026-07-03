@@ -7,7 +7,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_DIR"
 
-BRANCH="${DEPLOY_BRANCH:-main}"
+CURRENT_BRANCH="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+BRANCH="${DEPLOY_BRANCH:-$CURRENT_BRANCH}"
+if [ -z "$BRANCH" ]; then
+  echo "[autopull] unable to detect current branch (detached HEAD). Set DEPLOY_BRANCH explicitly."
+  exit 1
+fi
 INTERVAL="${DEPLOY_POLL_INTERVAL:-60}"   # seconds
 APP_NAME="polymarket-copybot"
 RECREATE_SCRIPT="$REPO_DIR/scripts/pm2-recreate-copybot.sh"
