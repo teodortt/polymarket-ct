@@ -2,7 +2,8 @@ import * as dotenv from "dotenv";
 import { resolve } from "path";
 
 // Load .env from the repo root regardless of PM2/process working directory.
-dotenv.config({ path: resolve(__dirname, "../.env") });
+// Force .env values to win over inherited process env (e.g. stale PM2 env).
+dotenv.config({ path: resolve(__dirname, "../.env"), override: true });
 
 import { WeatherConfig } from "./types";
 
