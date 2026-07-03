@@ -270,6 +270,22 @@ export class WeatherEngine {
 
     this.lastSignals = signals;
     this.lastScanAt = Date.now();
+    if (place) {
+      if (placedThisScan > 0) {
+        console.log(`[Weather] placed ${placedThisScan} order(s) this scan.`);
+      } else {
+        const effectiveMinBankroll =
+          this.cfg.minTradeUsdc /
+          Math.max(this.cfg.maxBankrollFractionPerEvent, 1e-9);
+        const fundsNote =
+          bankroll < effectiveMinBankroll
+            ? ` — bankroll $${bankroll.toFixed(2)} is below the ~$${effectiveMinBankroll.toFixed(2)} needed to clear the $${this.cfg.minTradeUsdc.toFixed(2)} min trade at a ${this.cfg.maxBankrollFractionPerEvent} per-event cap; fund the live wallet to trade`
+            : "";
+        console.log(
+          `[Weather] no orders placed this scan (${signals.length} signal(s) evaluated)${fundsNote}`,
+        );
+      }
+    }
     return signals;
   }
 
@@ -328,7 +344,14 @@ export class WeatherEngine {
       bucket.liquidity * this.cfg.maxLiquidityFraction,
     );
     notional = Math.floor(notional * 100) / 100;
-    if (notional < this.cfg.minTradeUsdc) return false;
+    if (notional < this.cfg.minTradeUsdc) {
+      console.log(
+        `[Weather] skip ${signal.event.city} ${signal.event.targetDate}: ` +
+          `notional $${notional.toFixed(2)} < minTrade $${this.cfg.minTradeUsdc.toFixed(2)} ` +
+          `(bankroll $${bankroll.toFixed(2)} × ${this.cfg.maxBankrollFractionPerEvent} cap — fund the live wallet to trade this edge)`,
+      );
+      return false;
+    }
 
     // Limit price: cross the spread slightly for fill, but never above fair
     // value (model prob) or the configured ceiling.
