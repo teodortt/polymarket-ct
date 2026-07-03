@@ -1151,4 +1151,39 @@ export class WeatherEngine {
       console.error("[Weather] Failed to save state:", err.message);
     }
   }
+
+  /**
+   * Permanently drop weather trade records (both DRY_RUN and LIVE) placed
+   * before `cutoffMs`, so /weather reports, P&L and history only reflect
+   * activity from that point forward. Also prunes the day-keyed dedupe map
+   * for days entirely before the cutoff. Persists immediately.
+   */
+  trimTradesBefore(cutoffMs: number): {
+    removedTrades: number;
+    keptTrades: number;
+    removedDays: number;
+  } {
+    const before = this.state.trades.length;
+    this.state.trades = this.state.trades.filter(
+      (trade) => trade.ts >= cutoffMs,
+    );
+    const removedTrades = before - this.state.trades.length;
+
+    const cutoffDay = todayStr(cutoffMs);
+    const dayKeysBefore = Object.keys(this.state.traded).length;
+    for (const day of Object.keys(this.state.traded)) {
+      if (day < cutoffDay) delete this.state.traded[day];
+    }
+    const removedDays = dayKeysBefore - Object.keys(this.state.traded).length;
+
+    this.saveState();
+    console.log(
+      `[Weather] Trimmed trades before ${cutoffDay}: removed ${removedTrades}, kept ${this.state.trades.length}.`,
+    );
+    return {
+      removedTrades,
+      keptTrades: this.state.trades.length,
+      removedDays,
+    };
+  }
 }

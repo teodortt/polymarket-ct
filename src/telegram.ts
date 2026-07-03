@@ -331,8 +331,15 @@ export class TelegramBot {
     setEnabled(enabled: boolean): void;
     getOpenPositions(): any[];
     maybeExitPosition(pos: any): Promise<void>;
+    trimTradesBefore(cutoffMs: number): {
+      removedTrades: number;
+      keptTrades: number;
+      removedDays: number;
+    };
   };
   private weatherInitPromise?: Promise<void>;
+  // Pending cutoff (ms) awaiting /weathertrim confirmation.
+  private pendingWeatherTrimCutoff?: number;
 
   constructor() {
     this.bot = new Telegraf(config.telegramBotToken);
@@ -376,6 +383,11 @@ export class TelegramBot {
     setEnabled(enabled: boolean): void;
     getOpenPositions(): any[];
     maybeExitPosition(pos: any): Promise<void>;
+    trimTradesBefore(cutoffMs: number): {
+      removedTrades: number;
+      keptTrades: number;
+      removedDays: number;
+    };
   }) {
     this.weatherEngine = engine;
     // Keep /weather operational even if the explicit provider hook was not set.
@@ -916,6 +928,68 @@ export class TelegramBot {
         return;
       }
       this.replyTo(ctx, `✅ ${res.msg}`);
+    });
+
+    // ── Trim weather activity (drop trades older than a cutoff date) ────────
+    b.command("weathertrim", async (ctx) => {
+      if (!this.allowed(ctx)) return;
+      const arg = ctx.message.text.split(" ")[1]?.trim();
+      if (!arg || !/^\d{4}-\d{2}-\d{2}$/.test(arg)) {
+        this.replyTo(
+          ctx,
+          "Usage: /weathertrim YYYY-MM-DD\n\nRemoves weather trade records placed BEFORE 00:00 UTC that day; everything from that date onward is kept. This only affects data/weather.json (BUY/SELL activity + P&L), not copy-trade history.",
+        );
+        return;
+      }
+      const cutoffMs = Date.parse(`${arg}T00:00:00.000Z`);
+      if (!Number.isFinite(cutoffMs)) {
+        this.replyTo(ctx, `❌ Invalid date: ${arg}`);
+        return;
+      }
+      await this.ensureWeatherRuntime();
+      if (!this.weatherEngine) {
+        this.replyTo(ctx, "❌ Weather engine not initialized.");
+        return;
+      }
+      this.pendingWeatherTrimCutoff = cutoffMs;
+      ctx.reply(
+        `⚠️ This will permanently delete weather trade records placed before *${arg} 00:00 UTC*, keeping only activity from that date onward. This cannot be undone.\n\nProceed?`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: "✅ Confirm", callback_data: "weathertrim:confirm" },
+                { text: "✖️ Cancel", callback_data: "weathertrim:abort" },
+              ],
+            ],
+          },
+        },
+      );
+    });
+    b.action("weathertrim:confirm", async (ctx) => {
+      if (!this.allowed(ctx)) return;
+      ctx.answerCbQuery("Trimming…").catch(() => {});
+      const cutoffMs = this.pendingWeatherTrimCutoff;
+      this.pendingWeatherTrimCutoff = undefined;
+      if (cutoffMs === undefined || !this.weatherEngine) {
+        this.editOrReply(ctx, "❌ Nothing pending to confirm.");
+        return;
+      }
+      const res = this.weatherEngine.trimTradesBefore(cutoffMs);
+      this.editOrReply(
+        ctx,
+        `🧹 *Weather trim complete.*\n\n` +
+          `• Removed: *${res.removedTrades}*\n` +
+          `• Kept: *${res.keptTrades}*\n\n` +
+          `_/weather report and P&L now reflect only the kept activity._`,
+      );
+    });
+    b.action("weathertrim:abort", (ctx) => {
+      if (!this.allowed(ctx)) return;
+      ctx.answerCbQuery("Cancelled").catch(() => {});
+      this.pendingWeatherTrimCutoff = undefined;
+      this.editOrReply(ctx, "↩️ Weather trim cancelled.");
     });
 
     // Settings
@@ -2093,6 +2167,7 @@ export class TelegramBot {
         `/orders — active orders\n` +
         `/weather — report, or /weather on|off\n` +
         `/weathercfg [KEY VALUE] — show/set weather runtime config\n` +
+        `/weathertrim YYYY-MM-DD — delete weather activity before that date\n` +
         `/exit — auto-exit toggle\n` +
         `/exitall — liquidate all positions immediately\n` +
         `/exitcfg [KEY VALUE] — show/set exit config\n` +
@@ -2299,6 +2374,10 @@ export class TelegramBot {
         { command: "retry", description: "Force-copy latest trade once" },
         { command: "weather", description: "Weather report or on/off" },
         { command: "weathercfg", description: "Show/set weather config" },
+        {
+          command: "weathertrim",
+          description: "Delete weather activity before a date",
+        },
         { command: "settings", description: "Global settings" },
         { command: "debug", description: "Watcher diagnostics" },
         { command: "dryrun", description: "Toggle dry-run: /dryrun on|off" },
