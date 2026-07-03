@@ -201,6 +201,7 @@ export interface WeatherTradeRecord {
   pnlFraction?: number; // (exitPrice - entryPrice) / entryPrice, for exits
   pnlUsd?: number; // realized PnL in USD, for exits
   relatedBuyTradeId?: string; // references the BUY trade this SELL closes
+  conditionId?: string; // hex condition ID for market lookup on exit
   status: string; // PLACED | DRY_RUN | FAILED | SKIPPED
   reason?: string;
   orderId?: string;

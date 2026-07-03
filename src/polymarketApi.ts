@@ -95,27 +95,73 @@ function normalizeTrade(raw: any): Trade {
   };
 }
 
+const GAMMA_API = "https://gamma-api.polymarket.com";
+
 export async function getMarketInfo(
   tokenId: string,
   conditionId?: string,
 ): Promise<MarketInfo | null> {
   // The CLOB /markets endpoint requires the conditionId (0x... hex), not the numeric token ID.
-  const lookupId = conditionId || tokenId;
+  // If conditionId looks like a hex condition ID, use it; otherwise fall through to Gamma lookup.
+  const hexConditionId =
+    conditionId && /^0x[0-9a-fA-F]+$/.test(conditionId) ? conditionId : null;
+
+  if (hexConditionId) {
+    try {
+      const res = await axios.get(`${CLOB_API}/markets/${hexConditionId}`, {
+        timeout: 10_000,
+        httpsAgent: directAgent,
+      });
+      const d = res.data;
+      const token = (d.tokens ?? []).find((t: any) => t.token_id === tokenId);
+      return {
+        conditionId: d.condition_id ?? conditionId ?? "",
+        tokenId,
+        outcome: token?.outcome ?? d.outcome ?? "",
+        question: d.question ?? "",
+        tickSize: d.minimum_tick_size ?? "0.01",
+        negRisk: d.neg_risk ?? false,
+      };
+    } catch {
+      // fall through to Gamma API
+    }
+  }
+
+  // Fallback: look up by token ID via the Gamma API. This handles cases where
+  // the conditionId is missing (e.g. older stored trade records) or the CLOB
+  // lookup failed.
   try {
-    const res = await axios.get(`${CLOB_API}/markets/${lookupId}`, {
+    const res = await axios.get(`${GAMMA_API}/markets`, {
+      params: { clob_token_ids: tokenId },
       timeout: 10_000,
       httpsAgent: directAgent,
     });
-    const d = res.data;
-    // Find the specific outcome for this tokenId from the tokens array
-    const token = (d.tokens ?? []).find((t: any) => t.token_id === tokenId);
+    const markets: any[] = Array.isArray(res.data) ? res.data : [];
+    const market = markets[0];
+    if (!market) return null;
+    // Gamma returns clobTokenIds as a JSON-encoded array string.
+    const tokens: string[] = (() => {
+      try {
+        return JSON.parse(market.clobTokenIds ?? "[]");
+      } catch {
+        return [];
+      }
+    })();
+    const idx = tokens.indexOf(tokenId);
+    const outcomes: string[] = (() => {
+      try {
+        return JSON.parse(market.outcomes ?? "[]");
+      } catch {
+        return [];
+      }
+    })();
     return {
-      conditionId: d.condition_id ?? conditionId ?? "",
+      conditionId: market.conditionId ?? market.condition_id ?? "",
       tokenId,
-      outcome: token?.outcome ?? d.outcome ?? "",
-      question: d.question ?? "",
-      tickSize: d.minimum_tick_size ?? "0.01",
-      negRisk: d.neg_risk ?? false,
+      outcome: outcomes[idx] ?? "",
+      question: market.question ?? "",
+      tickSize: market.minimum_tick_size ?? "0.01",
+      negRisk: market.negRisk ?? market.neg_risk ?? false,
     };
   } catch {
     return null;

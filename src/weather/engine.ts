@@ -392,6 +392,7 @@ export class WeatherEngine {
       targetDate: signal.event.targetDate,
       bucketLabel: bucket.label,
       tokenId: bucket.tokenIdYes,
+      conditionId: bucket.conditionId,
       side: "BUY",
       outcome: "Yes",
       price: limit,
@@ -605,7 +606,7 @@ export class WeatherEngine {
 
     const trade: Trade = {
       id: `weather-exit-${buyTrade.tokenId}-${Date.now()}`,
-      market: "", // populated by copyTradeWithSize
+      market: buyTrade.conditionId ?? "",
       outcome: "Yes",
       tokenId: buyTrade.tokenId,
       side: "SELL",
