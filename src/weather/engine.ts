@@ -463,33 +463,72 @@ export class WeatherEngine {
    * Public so Telegram can query and manually trigger exits.
    */
   getOpenPositions(): WeatherTradeRecord[] {
-    const mode = this.currentExecutionMode();
     const opens: WeatherTradeRecord[] = [];
-    const closedTokens = new Set<string>();
 
-    // Collect all SELL trades to know which positions are closed
-    for (const trade of this.state.trades) {
-      if (
-        tradeExecutionMode(trade) === mode &&
-        trade.side === "SELL" &&
-        (trade.status === "PLACED" || trade.status === "DRY_RUN")
-      ) {
-        closedTokens.add(trade.tokenId);
-      }
-    }
-
-    // Return all active BUY trades that aren't closed by a SELL
+    // Return all active BUY trades that still have remaining shares to exit.
     for (const trade of this.activeTrades()) {
-      if (
-        trade.side === "BUY" &&
-        (trade.status === "PLACED" || trade.status === "DRY_RUN") &&
-        !closedTokens.has(trade.tokenId)
-      ) {
-        opens.push(trade);
-      }
+      if (trade.side !== "BUY") continue;
+      if (!(trade.status === "PLACED" || trade.status === "DRY_RUN")) continue;
+      if (this.isTerminalExitSkip(trade)) continue;
+      if (this.remainingSharesForBuyTrade(trade) <= 0.000001) continue;
+
+      opens.push(trade);
     }
 
     return opens;
+  }
+
+  private isTerminalExitSkip(buyTrade: WeatherTradeRecord): boolean {
+    return this.activeTrades().some(
+      (trade) =>
+        trade.side === "SELL" &&
+        trade.status === "SKIPPED" &&
+        this.matchesExitToBuyTrade(buyTrade, trade) &&
+        /minimum|too small to exit/i.test(String(trade.reason ?? "")),
+    );
+  }
+
+  private matchesExitToBuyTrade(
+    buyTrade: WeatherTradeRecord,
+    exitTrade: WeatherTradeRecord,
+  ): boolean {
+    if (exitTrade.side !== "SELL") return false;
+    if (
+      buyTrade.orderId &&
+      exitTrade.relatedBuyTradeId &&
+      exitTrade.relatedBuyTradeId === buyTrade.orderId
+    ) {
+      return true;
+    }
+
+    // Backward-compat fallback for historical records missing relatedBuyTradeId.
+    return (
+      exitTrade.tokenId === buyTrade.tokenId &&
+      exitTrade.ts >= buyTrade.ts &&
+      (!exitTrade.relatedBuyTradeId || !buyTrade.orderId)
+    );
+  }
+
+  private remainingSharesForBuyTrade(buyTrade: WeatherTradeRecord): number {
+    const buyShares =
+      buyTrade.price > 0 ? buyTrade.sizeUsdc / buyTrade.price : 0;
+    if (!Number.isFinite(buyShares) || buyShares <= 0) return 0;
+
+    let soldShares = 0;
+    for (const trade of this.activeTrades()) {
+      if (
+        trade.side === "SELL" &&
+        (trade.status === "PLACED" || trade.status === "DRY_RUN") &&
+        this.matchesExitToBuyTrade(buyTrade, trade)
+      ) {
+        const shares = trade.price > 0 ? trade.sizeUsdc / trade.price : 0;
+        if (Number.isFinite(shares) && shares > 0) {
+          soldShares += shares;
+        }
+      }
+    }
+
+    return Math.max(0, buyShares - soldShares);
   }
 
   /**
@@ -625,6 +664,12 @@ export class WeatherEngine {
         `${pnlInfo.reason} | Price: ${buyTrade.price} → ${pnlInfo.exitPrice}`,
     );
 
+    const remainingShares = this.remainingSharesForBuyTrade(buyTrade);
+    if (!Number.isFinite(remainingShares) || remainingShares <= 0.000001) {
+      return;
+    }
+    const remainingSizeUsdc = remainingShares * buyTrade.price;
+
     const trade: Trade = {
       id: `weather-exit-${buyTrade.tokenId}-${Date.now()}`,
       market: buyTrade.conditionId ?? "",
@@ -632,7 +677,7 @@ export class WeatherEngine {
       tokenId: buyTrade.tokenId,
       side: "SELL",
       price: pnlInfo.exitPrice,
-      size: buyTrade.sizeUsdc / buyTrade.price, // convert USDC to shares
+      size: remainingShares,
       timestamp: Math.floor(Date.now() / 1000),
       transactionHash: "",
       maker_address: "",
@@ -640,11 +685,18 @@ export class WeatherEngine {
       type: "TAKER",
     };
 
-    const result = await copyTradeWithSize(trade, buyTrade.sizeUsdc);
+    const result = await copyTradeWithSize(trade, remainingSizeUsdc);
 
-    const pnlUsd =
-      (pnlInfo.exitPrice - buyTrade.price) *
-      (buyTrade.sizeUsdc / buyTrade.price);
+    const soldShares = Math.max(
+      0,
+      result.submittedSizeShares ?? remainingShares,
+    );
+    const soldSizeUsdc = Math.max(
+      0,
+      result.submittedNotionalUsdc ?? soldShares * buyTrade.price,
+    );
+
+    const pnlUsd = (pnlInfo.exitPrice - buyTrade.price) * soldShares;
 
     const rec: WeatherTradeRecord = {
       ts: Date.now(),
@@ -658,7 +710,7 @@ export class WeatherEngine {
       side: "SELL",
       outcome: "Yes",
       price: pnlInfo.exitPrice,
-      sizeUsdc: buyTrade.sizeUsdc,
+      sizeUsdc: soldSizeUsdc,
       pnlFraction: pnlInfo.pnlFraction || 0,
       pnlUsd,
       relatedBuyTradeId: buyTrade.orderId,
@@ -668,7 +720,11 @@ export class WeatherEngine {
     };
     this.recordTrade(rec);
 
-    if (result.status === "PLACED" || result.status === "DRY_RUN") {
+    const fullyClosed = soldShares >= remainingShares - 0.000001;
+    if (
+      (result.status === "PLACED" || result.status === "DRY_RUN") &&
+      fullyClosed
+    ) {
       delete this.state.exitTrend[this.positionKey(buyTrade)];
       this.saveState();
     }

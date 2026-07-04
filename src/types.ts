@@ -29,6 +29,9 @@ export interface CopiedTrade {
   reason?: string;
   timestamp: number;
   sourceWallet?: string; // wallet whose trade was copied
+  submittedSizeShares?: number;
+  submittedNotionalUsdc?: number;
+  submittedPrice?: number;
 }
 
 export interface WalletConfig {

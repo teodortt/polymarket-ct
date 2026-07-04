@@ -126,17 +126,34 @@ function parseMinSize(reason: unknown): number | null {
   return m ? Number(m[1]) : null;
 }
 
+function parseShareMinimum(
+  reason: unknown,
+): { attempted: number; min: number } | null {
+  const m = String(reason ?? "").match(
+    /size\s*\(([0-9]*\.?[0-9]+)\)\s*lower than the minimum:\s*([0-9]*\.?[0-9]+)/i,
+  );
+  if (!m) return null;
+  const attempted = Number(m[1]);
+  const min = Number(m[2]);
+  if (!Number.isFinite(attempted) || !Number.isFinite(min)) return null;
+  return { attempted, min };
+}
+
 async function tryPlaceOrderWithClient(
   c: ClobClient,
   trade: Trade,
-  copySize: number,
+  copySizeUsdc: number,
   marketInfo: MarketInfo,
+  sellSizeShares?: number,
 ) {
   const tickSize = marketInfo.tickSize as "0.1" | "0.01" | "0.001" | "0.0001";
   const orderOpts = { tickSize, negRisk: marketInfo.negRisk };
   const side = trade.side === "BUY" ? Side.BUY : Side.SELL;
   const adjustedPrice = adjustPriceToTick(trade.price, tickSize);
-  const size = toLimitOrderSizeShares(trade.side, copySize, adjustedPrice);
+  const size =
+    trade.side === "SELL" && Number.isFinite(sellSizeShares)
+      ? Number(sellSizeShares)
+      : toLimitOrderSizeShares(trade.side, copySizeUsdc, adjustedPrice);
 
   return c.createAndPostOrder(
     {
@@ -177,10 +194,80 @@ async function getAvailableCollateralUsdc(
   }
 }
 
+async function getAvailableConditionalShares(
+  c: ClobClient,
+  tokenId: string,
+  forceUpdate = false,
+): Promise<number | null> {
+  try {
+    if (forceUpdate) {
+      try {
+        await c.updateBalanceAllowance({
+          asset_type: AssetType.CONDITIONAL,
+          token_id: tokenId,
+        });
+      } catch {
+        // Non-fatal — fall through and read whatever is currently cached.
+      }
+    }
+    const ba = await c.getBalanceAllowance({
+      asset_type: AssetType.CONDITIONAL,
+      token_id: tokenId,
+    });
+    const raw = Number(ba?.balance ?? "0");
+    if (!Number.isFinite(raw) || raw < 0) return null;
+    // Conditional token balances are also returned in 6-decimal units.
+    return raw / 1_000_000;
+  } catch {
+    return null;
+  }
+}
+
+async function retrySellWithSmallerSizes(
+  c: ClobClient,
+  trade: Trade,
+  marketInfo: MarketInfo,
+  baseShares: number,
+  minShares: number | null,
+) {
+  let response: any = null;
+  let usedShares = baseShares;
+  const factors = [0.98, 0.9, 0.8, 0.67, 0.5, 0.4, 0.33];
+
+  for (const factor of factors) {
+    const shares = Number((baseShares * factor).toFixed(6));
+    if (shares <= 0 || shares >= usedShares) continue;
+    if (minShares !== null && shares < minShares) continue;
+
+    // Re-sync token balance/allowance before each smaller-chunk retry.
+    await getAvailableConditionalShares(c, trade.tokenId, true);
+
+    response = await tryPlaceOrderWithClient(
+      c,
+      trade,
+      shares * trade.price,
+      marketInfo,
+      shares,
+    );
+    if (response?.success) {
+      return { response, usedShares: shares };
+    }
+
+    usedShares = shares;
+    const shareMin = parseShareMinimum(response?.errorMsg || response);
+    if (shareMin && shares < shareMin.min) {
+      break;
+    }
+  }
+
+  return { response, usedShares: baseShares };
+}
+
 async function retryOrderWithFallbackAuth(
   trade: Trade,
   copySize: number,
   marketInfo: MarketInfo,
+  sellSizeShares?: number,
 ) {
   const modes = getFallbackAuthModes();
   const modeByKey = new Map(modes.map((m) => [makeAuthKey(m), m]));
@@ -198,6 +285,7 @@ async function retryOrderWithFallbackAuth(
         trade,
         copySize,
         marketInfo,
+        sellSizeShares,
       );
       if (response?.success) {
         client = c;
@@ -232,7 +320,7 @@ export async function copyTradeWithSize(
     timestamp: Date.now(),
   };
 
-  if (copySize < config.minTradeUsdc) {
+  if (trade.side === "BUY" && copySize < config.minTradeUsdc) {
     result.reason = `Size too small: $${copySize.toFixed(2)} < $${config.minTradeUsdc}`;
     return result;
   }
@@ -263,15 +351,79 @@ export async function copyTradeWithSize(
     return result;
   }
 
+  const tickSize = marketInfo.tickSize as "0.1" | "0.01" | "0.001" | "0.0001";
+  const submittedPrice = adjustPriceToTick(trade.price, tickSize);
+
   if (config.dryRun) {
+    const drySellShares =
+      trade.side === "SELL"
+        ? Number.isFinite(trade.size) && trade.size > 0
+          ? Number(trade.size)
+          : toLimitOrderSizeShares("SELL", copySize, submittedPrice)
+        : undefined;
     result.status = "DRY_RUN";
     result.reason = `DRY_RUN: ${trade.side} $${copySize.toFixed(2)} @ ${trade.price}`;
+    result.submittedPrice = submittedPrice;
+    if (
+      trade.side === "SELL" &&
+      drySellShares &&
+      Number.isFinite(drySellShares)
+    ) {
+      result.submittedSizeShares = drySellShares;
+      result.submittedNotionalUsdc = drySellShares * submittedPrice;
+    }
     return result;
   }
 
   try {
     const c = await initTrader();
     let effectiveCopySize = copySize;
+    let effectiveSellSizeShares: number | undefined;
+
+    if (trade.side === "SELL") {
+      const fromTrade = Number(trade.size);
+      if (Number.isFinite(fromTrade) && fromTrade > 0) {
+        effectiveSellSizeShares = fromTrade;
+      } else {
+        effectiveSellSizeShares = toLimitOrderSizeShares(
+          "SELL",
+          copySize,
+          trade.price,
+        );
+      }
+
+      if (
+        !Number.isFinite(effectiveSellSizeShares) ||
+        effectiveSellSizeShares <= 0
+      ) {
+        result.status = "SKIPPED";
+        result.reason = "Invalid SELL size — no shares available to exit";
+        return result;
+      }
+
+      // Re-read token balance/allowance right before selling; local state can drift.
+      const availableShares = await getAvailableConditionalShares(
+        c,
+        trade.tokenId,
+        true,
+      );
+      if (availableShares !== null) {
+        if (availableShares <= 0) {
+          result.status = "SKIPPED";
+          result.reason = "No conditional token balance available for SELL";
+          return result;
+        }
+        const bufferedShares = Math.max(0, availableShares - 0.000001);
+        if (bufferedShares <= 0) {
+          result.status = "SKIPPED";
+          result.reason = "Conditional token balance too small to sell";
+          return result;
+        }
+        if (bufferedShares < effectiveSellSizeShares) {
+          effectiveSellSizeShares = bufferedShares;
+        }
+      }
+    }
 
     // Preflight BUY sizing by available collateral to avoid avoidable rejects.
     if (trade.side === "BUY") {
@@ -301,14 +453,107 @@ export async function copyTradeWithSize(
       trade,
       effectiveCopySize,
       marketInfo,
+      effectiveSellSizeShares,
     );
 
     // If server says min order is higher, retry once with that minimum.
     if (!response?.success) {
       const minSize = parseMinSize(response?.errorMsg || response);
       if (minSize && effectiveCopySize < minSize) {
-        response = await tryPlaceOrderWithClient(c, trade, minSize, marketInfo);
+        response = await tryPlaceOrderWithClient(
+          c,
+          trade,
+          minSize,
+          marketInfo,
+          effectiveSellSizeShares,
+        );
       }
+
+      // Some rejects include the minimum in shares (e.g. "Size (3.04) lower than the minimum: 5").
+      // BUY can increase notional and retry; SELL cannot exceed held shares, so skip cleanly.
+      const shareMin = parseShareMinimum(response?.errorMsg || response);
+      if (shareMin) {
+        if (trade.side === "BUY") {
+          const tickSize = marketInfo.tickSize as
+            | "0.1"
+            | "0.01"
+            | "0.001"
+            | "0.0001";
+          const adjustedPrice = adjustPriceToTick(trade.price, tickSize);
+          const minNotional = shareMin.min * adjustedPrice + 0.02;
+          if (effectiveCopySize < minNotional) {
+            effectiveCopySize = minNotional;
+            response = await tryPlaceOrderWithClient(
+              c,
+              trade,
+              effectiveCopySize,
+              marketInfo,
+              effectiveSellSizeShares,
+            );
+          }
+        } else if (
+          effectiveSellSizeShares !== undefined &&
+          effectiveSellSizeShares < shareMin.min
+        ) {
+          result.status = "SKIPPED";
+          result.reason =
+            `Position too small to exit: ${effectiveSellSizeShares.toFixed(4)} shares ` +
+            `< exchange minimum ${shareMin.min}`;
+          return result;
+        }
+      }
+
+      // SELL path: if balance/allowance drifts or book is thin, retry with
+      // refreshed token balance and smaller chunks instead of reusing stale size.
+      if (!response?.success && trade.side === "SELL") {
+        const reason = response?.errorMsg || response;
+
+        if (
+          isInsufficientBalance(reason) &&
+          effectiveSellSizeShares !== undefined
+        ) {
+          const availableShares = await getAvailableConditionalShares(
+            c,
+            trade.tokenId,
+            true,
+          );
+          if (availableShares !== null && availableShares > 0) {
+            const retryShares = Math.max(
+              0,
+              Math.min(effectiveSellSizeShares, availableShares - 0.000001),
+            );
+            if (retryShares > 0 && retryShares < effectiveSellSizeShares) {
+              effectiveSellSizeShares = retryShares;
+              response = await tryPlaceOrderWithClient(
+                c,
+                trade,
+                retryShares * trade.price,
+                marketInfo,
+                retryShares,
+              );
+            }
+          }
+        }
+
+        if (!response?.success && effectiveSellSizeShares !== undefined) {
+          const minShares =
+            parseShareMinimum(response?.errorMsg || response)?.min ?? null;
+          const retried = await retrySellWithSmallerSizes(
+            c,
+            trade,
+            marketInfo,
+            effectiveSellSizeShares,
+            minShares,
+          );
+          if (retried.response) {
+            response = retried.response;
+            if (response?.success) {
+              effectiveSellSizeShares = retried.usedShares;
+            }
+          }
+        }
+      }
+
       // If BUY still hits balance/allowance, downsize once and retry.
       if (
         !response?.success &&
@@ -324,10 +569,26 @@ export async function copyTradeWithSize(
               trade,
               retrySize,
               marketInfo,
+              effectiveSellSizeShares,
             );
           }
         }
       }
+    }
+
+    if (
+      !response?.success &&
+      trade.side === "SELL" &&
+      isInsufficientBalance(response?.errorMsg || response)
+    ) {
+      // Wrong auth/funder can surface as "not enough balance / allowance".
+      const fallback = await retryOrderWithFallbackAuth(
+        trade,
+        effectiveCopySize,
+        marketInfo,
+        effectiveSellSizeShares,
+      );
+      if (fallback) response = fallback;
     }
 
     if (!response?.success && isAuthRetryable(response?.errorMsg || response)) {
@@ -335,6 +596,7 @@ export async function copyTradeWithSize(
         trade,
         effectiveCopySize,
         marketInfo,
+        effectiveSellSizeShares,
       );
       if (fallback) response = fallback;
     }
@@ -363,6 +625,11 @@ export async function copyTradeWithSize(
     console.log(`[Trader] ✅ PLACED orderId=${response.orderID}`);
     result.status = "PLACED";
     result.orderId = response.orderID;
+    result.submittedPrice = submittedPrice;
+    if (trade.side === "SELL" && effectiveSellSizeShares) {
+      result.submittedSizeShares = effectiveSellSizeShares;
+      result.submittedNotionalUsdc = effectiveSellSizeShares * submittedPrice;
+    }
     return result;
   } catch (err: any) {
     console.error(`[Trader] ❌ createAndPostOrder FAILED: ${err.message}`);
