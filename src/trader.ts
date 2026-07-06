@@ -139,6 +139,8 @@ function parseShareMinimum(
   return { attempted, min };
 }
 
+const FALLBACK_MIN_SELL_SHARES = 5;
+
 async function tryPlaceOrderWithClient(
   c: ClobClient,
   trade: Trade,
@@ -420,6 +422,16 @@ export async function copyTradeWithSize(
         return result;
       }
 
+      // Polymarket rejects dust exits below a per-market share minimum
+      // (commonly 5 shares). Skip early to avoid noisy repeated failures.
+      if (effectiveSellSizeShares < FALLBACK_MIN_SELL_SHARES) {
+        result.status = "SKIPPED";
+        result.reason =
+          `Position too small to exit: ${effectiveSellSizeShares.toFixed(4)} shares ` +
+          `< exchange minimum ${FALLBACK_MIN_SELL_SHARES}`;
+        return result;
+      }
+
       // Re-read token balance/allowance right before selling; local state can drift.
       const availableShares = await getAvailableConditionalShares(
         c,
@@ -651,9 +663,19 @@ export async function copyTradeWithSize(
     }
     return result;
   } catch (err: any) {
-    console.error(`[Trader] ❌ createAndPostOrder FAILED: ${err.message}`);
+    const message = err?.message ?? String(err);
+    const shareMin = parseShareMinimum(message);
+    if (trade.side === "SELL" && shareMin) {
+      result.status = "SKIPPED";
+      result.reason =
+        `Position too small to exit: ${shareMin.attempted.toFixed(4)} shares ` +
+        `< exchange minimum ${shareMin.min}`;
+      return result;
+    }
+
+    console.error(`[Trader] ❌ createAndPostOrder FAILED: ${message}`);
     result.status = "FAILED";
-    result.reason = err.message;
+    result.reason = message;
     return result;
   }
 }
