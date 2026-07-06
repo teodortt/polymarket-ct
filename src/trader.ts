@@ -149,7 +149,7 @@ async function tryPlaceOrderWithClient(
   const tickSize = marketInfo.tickSize as "0.1" | "0.01" | "0.001" | "0.0001";
   const orderOpts = { tickSize, negRisk: marketInfo.negRisk };
   const side = trade.side === "BUY" ? Side.BUY : Side.SELL;
-  const adjustedPrice = adjustPriceToTick(trade.price, tickSize);
+  const adjustedPrice = getPostedPrice(trade.side, trade.price, tickSize);
   const size =
     trade.side === "SELL" && Number.isFinite(sellSizeShares)
       ? Number(sellSizeShares)
@@ -165,6 +165,25 @@ async function tryPlaceOrderWithClient(
     orderOpts,
     OrderType.GTC,
   );
+}
+
+function getPostedPrice(
+  side: "BUY" | "SELL",
+  inputPrice: number,
+  tickSize: "0.1" | "0.01" | "0.001" | "0.0001",
+): number {
+  const tick = Number(tickSize || 0.01);
+  const base = adjustPriceToTick(inputPrice, tickSize);
+  if (!Number.isFinite(tick) || tick <= 0) return base;
+
+  if (side === "SELL") {
+    // SELL exits should be slightly more aggressive than top-of-book so they
+    // cross immediately instead of resting as stale GTC orders.
+    const aggressive = Math.max(tick, base - 2 * tick);
+    return adjustPriceToTick(aggressive, tickSize);
+  }
+
+  return base;
 }
 
 async function getAvailableCollateralUsdc(
@@ -352,7 +371,7 @@ export async function copyTradeWithSize(
   }
 
   const tickSize = marketInfo.tickSize as "0.1" | "0.01" | "0.001" | "0.0001";
-  const submittedPrice = adjustPriceToTick(trade.price, tickSize);
+  const submittedPrice = getPostedPrice(trade.side, trade.price, tickSize);
 
   if (config.dryRun) {
     const drySellShares =

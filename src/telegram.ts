@@ -330,7 +330,7 @@ export class TelegramBot {
     getReport(): string | Promise<string>;
     setEnabled(enabled: boolean): void;
     getOpenPositions(): any[];
-    maybeExitPosition(pos: any): Promise<void>;
+    maybeExitPosition(pos: any): Promise<boolean>;
     trimTradesBefore(cutoffMs: number): {
       removedTrades: number;
       keptTrades: number;
@@ -382,7 +382,7 @@ export class TelegramBot {
     getReport(): string | Promise<string>;
     setEnabled(enabled: boolean): void;
     getOpenPositions(): any[];
-    maybeExitPosition(pos: any): Promise<void>;
+    maybeExitPosition(pos: any): Promise<boolean>;
     trimTradesBefore(cutoffMs: number): {
       removedTrades: number;
       keptTrades: number;
@@ -891,8 +891,8 @@ export class TelegramBot {
         let closed = 0;
         for (const pos of positions) {
           try {
-            await this.weatherEngine!.maybeExitPosition(pos);
-            closed++;
+            const ok = await this.weatherEngine!.maybeExitPosition(pos);
+            if (ok) closed++;
           } catch (err: any) {
             console.error(`Failed to exit ${pos.tokenId}:`, err?.message);
           }

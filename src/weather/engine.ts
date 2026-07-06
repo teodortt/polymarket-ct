@@ -11,7 +11,11 @@ import {
   WeatherTradeRecord,
   GeoPoint,
 } from "../types";
-import { copyTradeWithSize, getLiveUsdcBalance } from "../trader";
+import {
+  cancelOrdersByIds,
+  copyTradeWithSize,
+  getLiveUsdcBalance,
+} from "../trader";
 import { resolveCity } from "./geocode";
 import { buildForecastDistribution, leadDaysUntil } from "./forecast";
 import { fetchStationObs } from "./resolution";
@@ -129,6 +133,8 @@ export class WeatherEngine {
   // Measured per-(city, lead) forecast-error σ, read from data/weatherBacktest.json
   // (produced by `npm run weather:backtest`). Used as a floor on forecast width.
   private backtest: BacktestStore | null = null;
+  private openOrderIds: Set<string> = new Set();
+  private openOrdersUpdatedAt = 0;
 
   constructor(
     notifier?: WeatherNotifier,
@@ -437,6 +443,7 @@ export class WeatherEngine {
    * profit-taking targets. Runs periodically in the main loop.
    */
   private async scanForExits(): Promise<void> {
+    await this.refreshOpenOrderCache(true);
     const openPositions = this.getOpenPositions();
     if (openPositions.length === 0) return;
 
@@ -521,6 +528,11 @@ export class WeatherEngine {
         (trade.status === "PLACED" || trade.status === "DRY_RUN") &&
         this.matchesExitToBuyTrade(buyTrade, trade)
       ) {
+        // A SELL that is still open on the book is not a fill yet; keep the
+        // position open so exits can cancel/reprice instead of marking closed.
+        if (trade.status === "PLACED" && this.isOrderStillOpen(trade.orderId)) {
+          continue;
+        }
         const shares = trade.price > 0 ? trade.sizeUsdc / trade.price : 0;
         if (Number.isFinite(shares) && shares > 0) {
           soldShares += shares;
@@ -651,7 +663,7 @@ export class WeatherEngine {
    * Check if an open position should be exited and place a SELL if so.
    * Public so Telegram can manually trigger exits.
    */
-  async maybeExitPosition(buyTrade: WeatherTradeRecord): Promise<void> {
+  async maybeExitPosition(buyTrade: WeatherTradeRecord): Promise<boolean> {
     const pnlInfo = await this.calculatePositionPnL(buyTrade);
 
     if (!pnlInfo.shouldExit) {
@@ -665,14 +677,26 @@ export class WeatherEngine {
             `(${pnlInfo.reason})`,
         );
       }
-      return;
+      return false;
+    }
+
+    await this.refreshOpenOrderCache(true);
+    const pendingExitIds = this.getPendingExitOrderIds(buyTrade);
+    if (pendingExitIds.length > 0) {
+      const cancelled = await cancelOrdersByIds(pendingExitIds);
+      if (!cancelled.ok) {
+        console.warn(
+          `[Weather] Failed to cancel stale exit order(s) for ${buyTrade.tokenId}: ${cancelled.reason ?? "unknown"}`,
+        );
+      }
+      await this.refreshOpenOrderCache(true);
     }
 
     if (!pnlInfo.exitPrice) {
       console.warn(
         `[Weather] Cannot exit ${buyTrade.tokenId}: no market price`,
       );
-      return;
+      return false;
     }
 
     // Place SELL order
@@ -683,7 +707,7 @@ export class WeatherEngine {
 
     const remainingShares = this.remainingSharesForBuyTrade(buyTrade);
     if (!Number.isFinite(remainingShares) || remainingShares <= 0.000001) {
-      return;
+      return false;
     }
     const remainingSizeUsdc = remainingShares * buyTrade.price;
 
@@ -747,6 +771,49 @@ export class WeatherEngine {
     }
 
     await this.notifyExit(buyTrade, rec);
+    return result.status === "PLACED" || result.status === "DRY_RUN";
+  }
+
+  private isOrderStillOpen(orderId?: string): boolean {
+    if (!orderId) return false;
+    // Before first refresh we don't know exchange state; be conservative and
+    // treat placed exits as still open instead of assuming they filled.
+    if (this.openOrdersUpdatedAt === 0) return true;
+    return this.openOrderIds.has(String(orderId));
+  }
+
+  private getPendingExitOrderIds(buyTrade: WeatherTradeRecord): string[] {
+    const ids = new Set<string>();
+    for (const trade of this.activeTrades()) {
+      if (
+        trade.side === "SELL" &&
+        trade.status === "PLACED" &&
+        trade.orderId &&
+        this.matchesExitToBuyTrade(buyTrade, trade) &&
+        this.isOrderStillOpen(trade.orderId)
+      ) {
+        ids.add(String(trade.orderId));
+      }
+    }
+    return [...ids];
+  }
+
+  private async refreshOpenOrderCache(force = false): Promise<void> {
+    if (!this.dataProviders.getOrders) return;
+    if (!force && Date.now() - this.openOrdersUpdatedAt < 5_000) return;
+
+    try {
+      const orders = await this.dataProviders.getOrders();
+      const ids = new Set<string>();
+      for (const o of orders) {
+        const id = o?.id ?? o?.orderID ?? o?.orderId;
+        if (id != null) ids.add(String(id));
+      }
+      this.openOrderIds = ids;
+      this.openOrdersUpdatedAt = Date.now();
+    } catch {
+      // Leave cache unchanged on transient errors so exits continue operating.
+    }
   }
 
   private positionKey(buyTrade: WeatherTradeRecord): string {
