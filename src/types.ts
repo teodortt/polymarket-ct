@@ -97,6 +97,8 @@ export interface WeatherConfig {
   exitEnabled: boolean; // enable automatic exit/exit scanning
   exitProfitTarget: number; // exit with >=this profit fraction (e.g. 0.60 = 60%)
   exitStopLoss: number; // exit with <=this loss fraction (e.g. -0.30 = 30% loss)
+  exitMinPriceRatio: number; // skip exits when quote is below this fraction of entry
+  exitMinPriceAbs: number; // absolute floor to avoid dust-quote liquidations
   exitMinHoursHeld: number; // min hours to hold before exiting (e.g. 1, 6, 24)
   exitScanIntervalMs: number; // how often to check for exit opportunities
   // Trend-based protective exit for profitable positions: once a position is

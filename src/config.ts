@@ -55,11 +55,10 @@ const weather: WeatherConfig = {
     .map((s) => s.trim())
     .filter(Boolean),
   // Minimum edge (model probability − price paid) needed to fire a trade.
-  // Loosened 0.08→0.06 to surface more borderline-real edges.
-  minEdge: parseFloat(process.env.WEATHER_MIN_EDGE || "0.06"),
-  // Fractional Kelly. 0.35 = a more aggressive stake than quarter-Kelly while
-  // still well short of full-Kelly's ruin risk.
-  kellyFraction: parseFloat(process.env.WEATHER_KELLY_FRACTION || "0.35"),
+  // Conservative default: trade fewer but stronger edges.
+  minEdge: parseFloat(process.env.WEATHER_MIN_EDGE || "0.10"),
+  // Conservative fractional Kelly to reduce drawdowns from model error.
+  kellyFraction: parseFloat(process.env.WEATHER_KELLY_FRACTION || "0.20"),
   // Bankroll for Kelly sizing. 0 = auto (dry-run start balance / live USDC).
   bankrollUsdc: parseFloat(process.env.WEATHER_BANKROLL_USDC || "0"),
   maxTradeUsdc: parseFloat(process.env.WEATHER_MAX_TRADE_USDC || "20"),
@@ -70,14 +69,10 @@ const weather: WeatherConfig = {
       process.env.WEATHER_MAX_LIQ_FRACTION ||
       "0.02",
   ),
-  // Lowered 250→150 so thinner-but-live European/American afternoon books
-  // become eligible (they were just under the old floor).
-  minLiquidityUsdc: parseFloat(process.env.WEATHER_MIN_LIQUIDITY_USDC || "150"),
-  // Ignore buys outside this price band. Floor lowered 0.02→0.01 to admit 1–2¢
-  // model-edge buckets, but kept ABOVE the sub-cent (0.1–0.6¢) zone where the
-  // book is ≥99.9% certain against us — buying there is the documented
-  // money-loser (e.g. Seoul 30°C+ that settled −94.7%).
-  minPrice: parseFloat(process.env.WEATHER_MIN_PRICE || "0.01"),
+  // Require deeper books to reduce slippage/fake top-of-book quotes.
+  minLiquidityUsdc: parseFloat(process.env.WEATHER_MIN_LIQUIDITY_USDC || "250"),
+  // Ignore ultra-cheap longshots; they were a frequent source of -90%/-100% settles.
+  minPrice: parseFloat(process.env.WEATHER_MIN_PRICE || "0.03"),
   maxPrice: parseFloat(process.env.WEATHER_MAX_PRICE || "0.97"),
   // Discovery-time filter only (DISABLED by default). Polymarket sets every
   // event's `endDate` to 12:00 UTC of the measurement day regardless of city,
@@ -139,11 +134,9 @@ const weather: WeatherConfig = {
   // Clamp the learned correction so a bad sample can't wildly shift forecasts.
   maxCityBiasC: parseFloat(process.env.WEATHER_MAX_CITY_BIAS_C || "6"),
   // Hard capital-preservation cap: never stake more than this fraction of the
-  // bankroll on one event, regardless of what Kelly suggests. Raised 5%→8% to
-  // deploy more capital per edge on a small live bankroll (this is the binding
-  // size cap when the bankroll is small).
+  // bankroll on one event, regardless of what Kelly suggests.
   maxBankrollFractionPerEvent: parseFloat(
-    process.env.WEATHER_MAX_BANKROLL_FRACTION_PER_EVENT || "0.08",
+    process.env.WEATHER_MAX_BANKROLL_FRACTION_PER_EVENT || "0.05",
   ),
   // Settlement-lock detector thresholds (intraday, obs-grounded near-arb).
   lockMinProb: parseFloat(process.env.WEATHER_LOCK_MIN_PROB || "0.98"),
@@ -165,6 +158,12 @@ const weather: WeatherConfig = {
   ),
   // Exit position when loss reaches this fraction (e.g. -0.30 = 30% loss).
   exitStopLoss: parseFloat(process.env.WEATHER_EXIT_STOP_LOSS || "-0.30"),
+  // Avoid liquidating into dust quotes when the top-of-book is stale/illiquid.
+  // Exit quote must be >= max(entry * ratio, abs floor).
+  exitMinPriceRatio: parseFloat(
+    process.env.WEATHER_EXIT_MIN_PRICE_RATIO || "0.35",
+  ),
+  exitMinPriceAbs: parseFloat(process.env.WEATHER_EXIT_MIN_PRICE_ABS || "0.02"),
   // Minimum hours to hold a position before exiting (prevents churn).
   exitMinHoursHeld: parseFloat(process.env.WEATHER_EXIT_MIN_HOURS_HELD || "1"),
   // How often to scan for exit opportunities (milliseconds).

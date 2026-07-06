@@ -566,6 +566,23 @@ export class WeatherEngine {
     const pnlFraction = (exitPrice - buyTrade.price) / buyTrade.price;
     const hoursHeld = (Date.now() - buyTrade.ts) / (1000 * 3600);
 
+    // Guard against illiquid/stale top-of-book quotes that can print near-zero
+    // and realize unnecessary -95%/-100% exits.
+    const minExitPrice = Math.max(
+      buyTrade.price * this.cfg.exitMinPriceRatio,
+      this.cfg.exitMinPriceAbs,
+    );
+    if (exitPrice < minExitPrice) {
+      return {
+        pnlFraction,
+        exitPrice,
+        shouldExit: false,
+        reason:
+          `Exit quote too low: ${exitPrice.toFixed(3)} < min ${minExitPrice.toFixed(3)} ` +
+          `(entry ${buyTrade.price.toFixed(3)})`,
+      };
+    }
+
     // Check hold time
     if (hoursHeld < this.cfg.exitMinHoursHeld) {
       return {
