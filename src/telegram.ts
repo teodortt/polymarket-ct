@@ -840,7 +840,7 @@ export class TelegramBot {
       if (parts.length < 3) {
         this.replyTo(
           ctx,
-          "Usage:\n/weathercfg\n/weathercfg WEATHER_ENABLED true\n/weathercfg WEATHER_MIN_PRICE 0.03",
+          "Usage:\n`/weathercfg`\n`/weathercfg WEATHER_ENABLED true`\n`/weathercfg WEATHER_MIN_PRICE 0.03`",
         );
         return;
       }
@@ -848,10 +848,10 @@ export class TelegramBot {
       const value = parts.slice(2).join(" ");
       const res = this.applyWeatherConfig(key, value);
       if (!res.ok) {
-        this.replyTo(ctx, `❌ ${res.msg}`);
+        this.replyTo(ctx, `❌ \`${res.msg}\``);
         return;
       }
-      this.replyTo(ctx, `✅ ${res.msg}`);
+      this.replyTo(ctx, `✅ \`${res.msg}\``);
     });
     b.hears("🌦 Weather", (ctx) => this.handleWeather(ctx));
     b.action("refresh:weather", (ctx) => {
@@ -916,7 +916,7 @@ export class TelegramBot {
       if (parts.length < 3) {
         this.replyTo(
           ctx,
-          "Usage:\n/exitcfg\n/exitcfg WEATHER_EXIT_ENABLED true\n/exitcfg WEATHER_EXIT_PROFIT_TARGET 0.60\n/exitcfg WEATHER_EXIT_TREND_DROP_FROM_PEAK 0.08",
+          "Usage:\n`/exitcfg`\n`/exitcfg WEATHER_EXIT_ENABLED true`\n`/exitcfg WEATHER_EXIT_PROFIT_TARGET 0.60`\n`/exitcfg WEATHER_EXIT_TREND_DROP_FROM_PEAK 0.08`",
         );
         return;
       }
@@ -924,10 +924,10 @@ export class TelegramBot {
       const value = parts.slice(2).join(" ");
       const res = this.applyExitConfig(key, value);
       if (!res.ok) {
-        this.replyTo(ctx, `❌ ${res.msg}`);
+        this.replyTo(ctx, `❌ \`${res.msg}\``);
         return;
       }
-      this.replyTo(ctx, `✅ ${res.msg}`);
+      this.replyTo(ctx, `✅ \`${res.msg}\``);
     });
 
     // ── Trim weather activity (drop trades older than a cutoff date) ────────
@@ -1784,28 +1784,51 @@ export class TelegramBot {
 
   private weatherConfigSummary(): string {
     const w = config.weather;
+    const kv = (k: string, v: string | number | boolean) =>
+      `\`${k}\`=\`${v}\`\n`;
     return (
       `🌦 *Weather config*\n\n` +
-      `WEATHER_ENABLED=\`${w.enabled}\`\n` +
-      `WEATHER_MIN_EDGE=\`${w.minEdge}\`\n` +
-      `WEATHER_MIN_PRICE=\`${w.minPrice}\`\n` +
-      `WEATHER_MAX_PRICE=\`${w.maxPrice}\`\n` +
-      `WEATHER_MIN_LIQUIDITY_USDC=\`${w.minLiquidityUsdc}\`\n` +
-      `WEATHER_MAX_LIQUIDITY_FRACTION=\`${w.maxLiquidityFraction}\`\n` +
-      `WEATHER_MIN_LEAD_DAYS=\`${w.minLeadDays}\`\n` +
-      `WEATHER_SAME_DAY_CUTOFF_HOUR=\`${w.sameDayCutoffHour}\`\n` +
-      `WEATHER_MIN_HOURS_TO_RESOLVE=\`${w.minHoursToResolve}\`\n` +
-      `WEATHER_SPREAD_INFLATION=\`${w.spreadInflation}\`\n` +
-      `WEATHER_KDE_BANDWIDTH_F=\`${w.kdeBandwidthF}\`\n` +
-      `WEATHER_KDE_LEAD_PER_DAY_F=\`${w.kdeLeadPerDayF}\`\n` +
-      `WEATHER_SCAN_INTERVAL_MS=\`${w.scanIntervalMs}\`\n` +
-      `WEATHER_MAX_TRADES_PER_SCAN=\`${w.maxTradesPerScan}\`\n` +
-      `WEATHER_MAX_TRADES_PER_DAY=\`${w.maxTradesPerDay}\`\n` +
-      `WEATHER_MODELS=\`${w.models}\`\n\n` +
+      kv("WEATHER_ENABLED", w.enabled) +
+      kv("WEATHER_LOOKAHEAD_DAYS", w.lookaheadDays) +
+      kv("WEATHER_MIN_EDGE", w.minEdge) +
+      kv("WEATHER_KELLY_FRACTION", w.kellyFraction) +
+      kv("WEATHER_BANKROLL_USDC", w.bankrollUsdc) +
+      kv("WEATHER_MAX_TRADE_USDC", w.maxTradeUsdc) +
+      kv("WEATHER_MIN_TRADE_USDC", w.minTradeUsdc) +
+      kv("WEATHER_MIN_PRICE", w.minPrice) +
+      kv("WEATHER_MAX_PRICE", w.maxPrice) +
+      kv("WEATHER_MIN_LIQUIDITY_USDC", w.minLiquidityUsdc) +
+      kv("WEATHER_MAX_LIQUIDITY_FRACTION", w.maxLiquidityFraction) +
+      kv("WEATHER_MIN_LEAD_DAYS", w.minLeadDays) +
+      kv("WEATHER_SAME_DAY_CUTOFF_HOUR", w.sameDayCutoffHour) +
+      kv("WEATHER_MIN_HOURS_TO_RESOLVE", w.minHoursToResolve) +
+      kv("WEATHER_SPREAD_INFLATION", w.spreadInflation) +
+      kv("WEATHER_KDE_BANDWIDTH_F", w.kdeBandwidthF) +
+      kv("WEATHER_KDE_LEAD_PER_DAY_F", w.kdeLeadPerDayF) +
+      kv("WEATHER_DETERMINISTIC_WEIGHT", w.deterministicWeight) +
+      kv("WEATHER_DISAGREEMENT_SIGMA_WEIGHT", w.disagreementSigmaWeight) +
+      kv("WEATHER_SCAN_INTERVAL_MS", w.scanIntervalMs) +
+      kv("WEATHER_MAX_TRADES_PER_SCAN", w.maxTradesPerScan) +
+      kv("WEATHER_MAX_TRADES_PER_DAY", w.maxTradesPerDay) +
+      kv(
+        "WEATHER_MAX_BANKROLL_FRACTION_PER_EVENT",
+        w.maxBankrollFractionPerEvent,
+      ) +
+      kv("WEATHER_SETTLE_YES_THRESHOLD", w.settleYesThreshold) +
+      kv("WEATHER_BIAS_EMA_ALPHA", w.biasEmaAlpha) +
+      kv("WEATHER_BIAS_MIN_SAMPLES", w.biasMinSamples) +
+      kv("WEATHER_MAX_CITY_BIAS_C", w.maxCityBiasC) +
+      kv("WEATHER_LOCK_MIN_PROB", w.lockMinProb) +
+      kv("WEATHER_LOCK_MAX_ASK", w.lockMaxAsk) +
+      kv("WEATHER_BACKTEST_SIGMA_FLOOR", w.backtestSigmaFloor) +
+      kv("WEATHER_BACKTEST_MIN_SAMPLES", w.backtestMinSamples) +
+      kv("WEATHER_CITIES", w.cities.join(",") || "(all)") +
+      kv("WEATHER_MODELS", w.models) +
+      `\n` +
       `_Runtime only: values are not persisted to .env automatically._\n` +
       `Usage:\n` +
-      `/weather on|off\n` +
-      `/weathercfg WEATHER_MIN_PRICE 0.03`
+      `\`/weather on\` | \`/weather off\`\n` +
+      `\`/weathercfg WEATHER_MIN_PRICE 0.03\``
     );
   }
 
@@ -1839,6 +1862,17 @@ export class TelegramBot {
         else w.enabled = b;
         return { ok: true, msg: `WEATHER_ENABLED=${b}` };
       }
+      case "LOOKAHEAD_DAYS": {
+        const n = parseIntNum();
+        if (n == null || n < 0) {
+          return {
+            ok: false,
+            msg: "WEATHER_LOOKAHEAD_DAYS must be an integer >= 0.",
+          };
+        }
+        w.lookaheadDays = n;
+        return { ok: true, msg: `WEATHER_LOOKAHEAD_DAYS=${n}` };
+      }
       case "MIN_EDGE": {
         const n = parseNum();
         if (n == null || n < 0 || n > 1) {
@@ -1849,6 +1883,41 @@ export class TelegramBot {
         }
         w.minEdge = n;
         return { ok: true, msg: `WEATHER_MIN_EDGE=${n}` };
+      }
+      case "KELLY_FRACTION": {
+        const n = parseNum();
+        if (n == null || n < 0 || n > 10) {
+          return {
+            ok: false,
+            msg: "WEATHER_KELLY_FRACTION must be between 0 and 10.",
+          };
+        }
+        w.kellyFraction = n;
+        return { ok: true, msg: `WEATHER_KELLY_FRACTION=${n}` };
+      }
+      case "BANKROLL_USDC": {
+        const n = parseNum();
+        if (n == null || n < 0) {
+          return { ok: false, msg: "WEATHER_BANKROLL_USDC must be >= 0." };
+        }
+        w.bankrollUsdc = n;
+        return { ok: true, msg: `WEATHER_BANKROLL_USDC=${n}` };
+      }
+      case "MAX_TRADE_USDC": {
+        const n = parseNum();
+        if (n == null || n <= 0) {
+          return { ok: false, msg: "WEATHER_MAX_TRADE_USDC must be > 0." };
+        }
+        w.maxTradeUsdc = n;
+        return { ok: true, msg: `WEATHER_MAX_TRADE_USDC=${n}` };
+      }
+      case "MIN_TRADE_USDC": {
+        const n = parseNum();
+        if (n == null || n < 0) {
+          return { ok: false, msg: "WEATHER_MIN_TRADE_USDC must be >= 0." };
+        }
+        w.minTradeUsdc = n;
+        return { ok: true, msg: `WEATHER_MIN_TRADE_USDC=${n}` };
       }
       case "MIN_PRICE": {
         const n = parseNum();
@@ -1949,6 +2018,28 @@ export class TelegramBot {
         w.kdeLeadPerDayF = n;
         return { ok: true, msg: `WEATHER_KDE_LEAD_PER_DAY_F=${n}` };
       }
+      case "DETERMINISTIC_WEIGHT": {
+        const n = parseNum();
+        if (n == null || n < 0 || n > 1) {
+          return {
+            ok: false,
+            msg: "WEATHER_DETERMINISTIC_WEIGHT must be between 0 and 1.",
+          };
+        }
+        w.deterministicWeight = n;
+        return { ok: true, msg: `WEATHER_DETERMINISTIC_WEIGHT=${n}` };
+      }
+      case "DISAGREEMENT_SIGMA_WEIGHT": {
+        const n = parseNum();
+        if (n == null || n < 0) {
+          return {
+            ok: false,
+            msg: "WEATHER_DISAGREEMENT_SIGMA_WEIGHT must be >= 0.",
+          };
+        }
+        w.disagreementSigmaWeight = n;
+        return { ok: true, msg: `WEATHER_DISAGREEMENT_SIGMA_WEIGHT=${n}` };
+      }
       case "SCAN_INTERVAL_MS": {
         const n = parseIntNum();
         if (n == null || n < 1000) {
@@ -1982,6 +2073,127 @@ export class TelegramBot {
         w.maxTradesPerDay = n;
         return { ok: true, msg: `WEATHER_MAX_TRADES_PER_DAY=${n}` };
       }
+      case "MAX_BANKROLL_FRACTION_PER_EVENT": {
+        const n = parseNum();
+        if (n == null || n < 0 || n > 1) {
+          return {
+            ok: false,
+            msg: "WEATHER_MAX_BANKROLL_FRACTION_PER_EVENT must be between 0 and 1.",
+          };
+        }
+        w.maxBankrollFractionPerEvent = n;
+        return {
+          ok: true,
+          msg: `WEATHER_MAX_BANKROLL_FRACTION_PER_EVENT=${n}`,
+        };
+      }
+      case "SETTLE_YES_THRESHOLD": {
+        const n = parseNum();
+        if (n == null || n < 0 || n > 1) {
+          return {
+            ok: false,
+            msg: "WEATHER_SETTLE_YES_THRESHOLD must be between 0 and 1.",
+          };
+        }
+        w.settleYesThreshold = n;
+        return { ok: true, msg: `WEATHER_SETTLE_YES_THRESHOLD=${n}` };
+      }
+      case "BIAS_EMA_ALPHA": {
+        const n = parseNum();
+        if (n == null || n < 0 || n > 1) {
+          return {
+            ok: false,
+            msg: "WEATHER_BIAS_EMA_ALPHA must be between 0 and 1.",
+          };
+        }
+        w.biasEmaAlpha = n;
+        return { ok: true, msg: `WEATHER_BIAS_EMA_ALPHA=${n}` };
+      }
+      case "BIAS_MIN_SAMPLES": {
+        const n = parseIntNum();
+        if (n == null || n < 0) {
+          return {
+            ok: false,
+            msg: "WEATHER_BIAS_MIN_SAMPLES must be an integer >= 0.",
+          };
+        }
+        w.biasMinSamples = n;
+        return { ok: true, msg: `WEATHER_BIAS_MIN_SAMPLES=${n}` };
+      }
+      case "MAX_CITY_BIAS_C": {
+        const n = parseNum();
+        if (n == null || n < 0) {
+          return {
+            ok: false,
+            msg: "WEATHER_MAX_CITY_BIAS_C must be >= 0.",
+          };
+        }
+        w.maxCityBiasC = n;
+        return { ok: true, msg: `WEATHER_MAX_CITY_BIAS_C=${n}` };
+      }
+      case "LOCK_MIN_PROB": {
+        const n = parseNum();
+        if (n == null || n < 0 || n > 1) {
+          return {
+            ok: false,
+            msg: "WEATHER_LOCK_MIN_PROB must be between 0 and 1.",
+          };
+        }
+        w.lockMinProb = n;
+        return { ok: true, msg: `WEATHER_LOCK_MIN_PROB=${n}` };
+      }
+      case "LOCK_MAX_ASK": {
+        const n = parseNum();
+        if (n == null || n < 0 || n > 1) {
+          return {
+            ok: false,
+            msg: "WEATHER_LOCK_MAX_ASK must be between 0 and 1.",
+          };
+        }
+        w.lockMaxAsk = n;
+        return { ok: true, msg: `WEATHER_LOCK_MAX_ASK=${n}` };
+      }
+      case "BACKTEST_SIGMA_FLOOR": {
+        const b = parseBool(valueRaw);
+        if (b === undefined) {
+          return {
+            ok: false,
+            msg: "Invalid boolean. Use true/false or on/off.",
+          };
+        }
+        w.backtestSigmaFloor = b;
+        return { ok: true, msg: `WEATHER_BACKTEST_SIGMA_FLOOR=${b}` };
+      }
+      case "BACKTEST_MIN_SAMPLES": {
+        const n = parseIntNum();
+        if (n == null || n < 0) {
+          return {
+            ok: false,
+            msg: "WEATHER_BACKTEST_MIN_SAMPLES must be an integer >= 0.",
+          };
+        }
+        w.backtestMinSamples = n;
+        return { ok: true, msg: `WEATHER_BACKTEST_MIN_SAMPLES=${n}` };
+      }
+      case "CITIES": {
+        const raw = valueRaw.trim();
+        if (!raw || raw === "-" || /^all$/i.test(raw)) {
+          w.cities = [];
+          return { ok: true, msg: "WEATHER_CITIES=(all)" };
+        }
+        const cities = raw
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (cities.length === 0) {
+          return {
+            ok: false,
+            msg: "WEATHER_CITIES cannot be empty. Use '-' to clear (all cities).",
+          };
+        }
+        w.cities = cities;
+        return { ok: true, msg: `WEATHER_CITIES=${cities.join(",")}` };
+      }
       case "MODELS": {
         const models = valueRaw
           .split(",")
@@ -1997,28 +2209,34 @@ export class TelegramBot {
       default:
         return {
           ok: false,
-          msg: "Unsupported key. Use one of: WEATHER_ENABLED, WEATHER_MIN_EDGE, WEATHER_MIN_PRICE, WEATHER_MAX_PRICE, WEATHER_MIN_LIQUIDITY_USDC, WEATHER_MAX_LIQUIDITY_FRACTION, WEATHER_MIN_LEAD_DAYS, WEATHER_SAME_DAY_CUTOFF_HOUR, WEATHER_MIN_HOURS_TO_RESOLVE, WEATHER_SPREAD_INFLATION, WEATHER_KDE_BANDWIDTH_F, WEATHER_KDE_LEAD_PER_DAY_F, WEATHER_SCAN_INTERVAL_MS, WEATHER_MAX_TRADES_PER_SCAN, WEATHER_MAX_TRADES_PER_DAY, WEATHER_MODELS.",
+          msg: "Unsupported key. Use /weathercfg and copy one key exactly as shown there (underscores included).",
         };
     }
   }
 
   private exitConfigSummary(): string {
     const w = config.weather;
+    const kv = (k: string, v: string | number | boolean) =>
+      `\`${k}\`=\`${v}\`\n`;
     return (
       `🚪 *Weather exit config*\n\n` +
-      `WEATHER_EXIT_ENABLED=\`${w.exitEnabled}\`\n` +
-      `WEATHER_EXIT_PROFIT_TARGET=\`${w.exitProfitTarget}\`\n` +
-      `WEATHER_EXIT_STOP_LOSS=\`${w.exitStopLoss}\`\n` +
-      `WEATHER_EXIT_MIN_HOURS_HELD=\`${w.exitMinHoursHeld}\`\n` +
-      `WEATHER_EXIT_SCAN_INTERVAL_MS=\`${w.exitScanIntervalMs}\`\n\n` +
-      `WEATHER_EXIT_TREND_ENABLED=\`${w.exitTrendEnabled}\`\n` +
-      `WEATHER_EXIT_TREND_DROP_FROM_PEAK=\`${w.exitTrendDropFromPeak}\`\n` +
-      `WEATHER_EXIT_TREND_MIN_PROFIT=\`${w.exitTrendMinProfit}\`\n\n` +
+      kv("WEATHER_EXIT_ENABLED", w.exitEnabled) +
+      kv("WEATHER_EXIT_PROFIT_TARGET", w.exitProfitTarget) +
+      kv("WEATHER_EXIT_STOP_LOSS", w.exitStopLoss) +
+      kv("WEATHER_EXIT_MIN_PRICE_RATIO", w.exitMinPriceRatio) +
+      kv("WEATHER_EXIT_MIN_PRICE_ABS", w.exitMinPriceAbs) +
+      kv("WEATHER_EXIT_MIN_HOURS_HELD", w.exitMinHoursHeld) +
+      kv("WEATHER_EXIT_SCAN_INTERVAL_MS", w.exitScanIntervalMs) +
+      `\n` +
+      kv("WEATHER_EXIT_TREND_ENABLED", w.exitTrendEnabled) +
+      kv("WEATHER_EXIT_TREND_DROP_FROM_PEAK", w.exitTrendDropFromPeak) +
+      kv("WEATHER_EXIT_TREND_MIN_PROFIT", w.exitTrendMinProfit) +
+      `\n` +
       `_Runtime only: values are not persisted to .env automatically._\n` +
       `Usage:\n` +
-      `/exit on|off\n` +
-      `/exitall — liquidate all positions NOW\n` +
-      `/exitcfg WEATHER_EXIT_PROFIT_TARGET 0.75`
+      `\`/exit on\` | \`/exit off\`\n` +
+      `\`/exitall\` — liquidate all positions NOW\n` +
+      `\`/exitcfg WEATHER_EXIT_PROFIT_TARGET 0.75\``
     );
   }
 
@@ -2078,6 +2296,28 @@ export class TelegramBot {
           ok: true,
           msg: `WEATHER_EXIT_STOP_LOSS=${(n * 100).toFixed(1)}%`,
         };
+      }
+      case "EXIT_MIN_PRICE_RATIO": {
+        const n = parseNum();
+        if (n == null || n < 0 || n > 1) {
+          return {
+            ok: false,
+            msg: "WEATHER_EXIT_MIN_PRICE_RATIO must be between 0 and 1.",
+          };
+        }
+        w.exitMinPriceRatio = n;
+        return { ok: true, msg: `WEATHER_EXIT_MIN_PRICE_RATIO=${n}` };
+      }
+      case "EXIT_MIN_PRICE_ABS": {
+        const n = parseNum();
+        if (n == null || n < 0 || n > 1) {
+          return {
+            ok: false,
+            msg: "WEATHER_EXIT_MIN_PRICE_ABS must be between 0 and 1.",
+          };
+        }
+        w.exitMinPriceAbs = n;
+        return { ok: true, msg: `WEATHER_EXIT_MIN_PRICE_ABS=${n}` };
       }
       case "EXIT_MIN_HOURS_HELD": {
         const n = parseNum();
@@ -2143,7 +2383,7 @@ export class TelegramBot {
       default:
         return {
           ok: false,
-          msg: "Unsupported key. Use one of: EXIT_ENABLED, EXIT_PROFIT_TARGET, EXIT_STOP_LOSS, EXIT_MIN_HOURS_HELD, EXIT_SCAN_INTERVAL_MS, EXIT_TREND_ENABLED, EXIT_TREND_DROP_FROM_PEAK, EXIT_TREND_MIN_PROFIT.",
+          msg: "Unsupported key. Use /exitcfg and copy one key exactly as shown there (underscores included).",
         };
     }
   }
