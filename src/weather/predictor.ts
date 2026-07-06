@@ -57,8 +57,10 @@ export function predictEvent(
 
   signals.sort((a, b) => b.modelProb - a.modelProb);
 
-  const best = pickBest(signals, cfg);
-  const bestRejectionReason = best ? undefined : rejectReason(signals, cfg);
+  const best = pickBest(signals, summary, cfg);
+  const bestRejectionReason = best
+    ? undefined
+    : rejectReason(signals, summary, cfg);
 
   return {
     event,
@@ -78,10 +80,61 @@ export function predictEvent(
 // systematically bought cheap long-shots that expire worthless. Restricting to
 // the mode means we only bet our genuine best estimate, and only when even that
 // estimate is mispriced enough to clear the gates.
+// The market's own favorite bucket: the one (other than our mode pick) with
+// the highest implied probability (yesPrice). If the market is confidently
+// (>= cfg.maxMarketFavoriteProb) backing a DIFFERENT bucket than our model's
+// mode, that is a strong signal our forecast is wrong, not that the market is
+// mispriced. Verified against real settlements 2026-07-06: mode-bucket trades
+// that fought a confident market like this lost 12 of 13 times regardless of
+// stated edge.
+function marketFavorite(
+  signals: BucketSignal[],
+  mode: BucketSignal,
+): BucketSignal | null {
+  let favorite: BucketSignal | null = null;
+  for (const s of signals) {
+    if (s.bucket === mode.bucket) continue;
+    if (!favorite || s.marketProb > favorite.marketProb) favorite = s;
+  }
+  return favorite;
+}
+
+function qualityRejectReason(
+  signals: BucketSignal[],
+  summary: ForecastSummary,
+  cfg: WeatherConfig,
+): string | undefined {
+  const mode = signals[0];
+  if (!mode) return "no forecast buckets";
+  if (mode.modelProb < cfg.minModeProb) {
+    return `mode prob ${(mode.modelProb * 100).toFixed(1)}% < min ${(cfg.minModeProb * 100).toFixed(1)}%`;
+  }
+  const second = signals[1];
+  const gap = mode.modelProb - (second?.modelProb ?? 0);
+  if (gap < cfg.minModeGap) {
+    return `mode gap ${(gap * 100).toFixed(1)}% < min ${(cfg.minModeGap * 100).toFixed(1)}%`;
+  }
+  if (summary.det != null) {
+    const gapAbs = Math.abs(summary.det - summary.ensembleMean);
+    const maxGap =
+      summary.unit === "F"
+        ? cfg.maxDetEnsembleGapC * 1.8
+        : cfg.maxDetEnsembleGapC;
+    if (gapAbs > maxGap) {
+      return `det/ensemble disagreement ${gapAbs.toFixed(1)}${summary.unit} > max ${maxGap.toFixed(1)}${summary.unit}`;
+    }
+  }
+  return undefined;
+}
+
 function pickBest(
   signals: BucketSignal[],
+  summary: ForecastSummary,
   cfg: WeatherConfig,
 ): BucketSignal | null {
+  const qualityReason = qualityRejectReason(signals, summary, cfg);
+  if (qualityReason) return null;
+
   // `signals` is pre-sorted by modelProb desc, so [0] is the mode.
   const mode = signals[0];
   if (!mode) return null;
@@ -90,10 +143,19 @@ function pickBest(
   if (mode.buyPrice < cfg.minPrice || mode.buyPrice > cfg.maxPrice) return null;
   if (mode.bucket.liquidity < cfg.minLiquidityUsdc) return null;
   if (mode.edge < cfg.minEdge) return null;
+  const favorite = marketFavorite(signals, mode);
+  if (favorite && favorite.marketProb >= cfg.maxMarketFavoriteProb) return null;
   return mode;
 }
 
-function rejectReason(signals: BucketSignal[], cfg: WeatherConfig): string {
+function rejectReason(
+  signals: BucketSignal[],
+  summary: ForecastSummary,
+  cfg: WeatherConfig,
+): string {
+  const qualityReason = qualityRejectReason(signals, summary, cfg);
+  if (qualityReason) return qualityReason;
+
   const mode = signals[0];
   if (!mode) return "no forecast buckets";
   if (!mode.bucket.acceptingOrders) return "market not accepting orders";
@@ -107,5 +169,9 @@ function rejectReason(signals: BucketSignal[], cfg: WeatherConfig): string {
   }
   if (mode.edge < cfg.minEdge)
     return `edge ${(mode.edge * 100).toFixed(1)}% < min ${(cfg.minEdge * 100).toFixed(1)}%`;
+  const favorite = marketFavorite(signals, mode);
+  if (favorite && favorite.marketProb >= cfg.maxMarketFavoriteProb) {
+    return `market favors "${favorite.bucket.label}" at ${(favorite.marketProb * 100).toFixed(1)}% vs our pick "${mode.bucket.label}" — disagreement guard`;
+  }
   return "filtered by strategy guard";
 }

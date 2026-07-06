@@ -840,7 +840,7 @@ export class TelegramBot {
       if (parts.length < 3) {
         this.replyTo(
           ctx,
-          "Usage:\n`/weathercfg`\n`/weathercfg WEATHER_ENABLED true`\n`/weathercfg WEATHER_MIN_PRICE 0.03`",
+          "Usage:\n`/weathercfg`\n`/weathercfg WEATHER_ENABLED true`\n`/weathercfg WEATHER_MIN_PRICE 0.12`",
         );
         return;
       }
@@ -1791,12 +1791,16 @@ export class TelegramBot {
       kv("WEATHER_ENABLED", w.enabled) +
       kv("WEATHER_LOOKAHEAD_DAYS", w.lookaheadDays) +
       kv("WEATHER_MIN_EDGE", w.minEdge) +
+      kv("WEATHER_MIN_MODE_PROB", w.minModeProb) +
+      kv("WEATHER_MIN_MODE_GAP", w.minModeGap) +
+      kv("WEATHER_MAX_DET_ENSEMBLE_GAP_C", w.maxDetEnsembleGapC) +
       kv("WEATHER_KELLY_FRACTION", w.kellyFraction) +
       kv("WEATHER_BANKROLL_USDC", w.bankrollUsdc) +
       kv("WEATHER_MAX_TRADE_USDC", w.maxTradeUsdc) +
       kv("WEATHER_MIN_TRADE_USDC", w.minTradeUsdc) +
       kv("WEATHER_MIN_PRICE", w.minPrice) +
       kv("WEATHER_MAX_PRICE", w.maxPrice) +
+      kv("WEATHER_MAX_MARKET_FAVORITE_PROB", w.maxMarketFavoriteProb) +
       kv("WEATHER_MIN_LIQUIDITY_USDC", w.minLiquidityUsdc) +
       kv("WEATHER_MAX_LIQUIDITY_FRACTION", w.maxLiquidityFraction) +
       kv("WEATHER_MIN_LEAD_DAYS", w.minLeadDays) +
@@ -1817,6 +1821,10 @@ export class TelegramBot {
       kv("WEATHER_SETTLE_YES_THRESHOLD", w.settleYesThreshold) +
       kv("WEATHER_BIAS_EMA_ALPHA", w.biasEmaAlpha) +
       kv("WEATHER_BIAS_MIN_SAMPLES", w.biasMinSamples) +
+      kv(
+        "WEATHER_MIN_CITY_BIAS_SAMPLES_TO_TRADE",
+        w.minCityBiasSamplesToTrade,
+      ) +
       kv("WEATHER_MAX_CITY_BIAS_C", w.maxCityBiasC) +
       kv("WEATHER_LOCK_MIN_PROB", w.lockMinProb) +
       kv("WEATHER_LOCK_MAX_ASK", w.lockMaxAsk) +
@@ -1828,7 +1836,7 @@ export class TelegramBot {
       `_Runtime only: values are not persisted to .env automatically._\n` +
       `Usage:\n` +
       `\`/weather on\` | \`/weather off\`\n` +
-      `\`/weathercfg WEATHER_MIN_PRICE 0.03\``
+      `\`/weathercfg WEATHER_MIN_PRICE 0.12\``
     );
   }
 
@@ -1884,6 +1892,39 @@ export class TelegramBot {
         w.minEdge = n;
         return { ok: true, msg: `WEATHER_MIN_EDGE=${n}` };
       }
+      case "MIN_MODE_PROB": {
+        const n = parseNum();
+        if (n == null || n < 0 || n > 1) {
+          return {
+            ok: false,
+            msg: "WEATHER_MIN_MODE_PROB must be between 0 and 1.",
+          };
+        }
+        w.minModeProb = n;
+        return { ok: true, msg: `WEATHER_MIN_MODE_PROB=${n}` };
+      }
+      case "MIN_MODE_GAP": {
+        const n = parseNum();
+        if (n == null || n < 0 || n > 1) {
+          return {
+            ok: false,
+            msg: "WEATHER_MIN_MODE_GAP must be between 0 and 1.",
+          };
+        }
+        w.minModeGap = n;
+        return { ok: true, msg: `WEATHER_MIN_MODE_GAP=${n}` };
+      }
+      case "MAX_DET_ENSEMBLE_GAP_C": {
+        const n = parseNum();
+        if (n == null || n < 0) {
+          return {
+            ok: false,
+            msg: "WEATHER_MAX_DET_ENSEMBLE_GAP_C must be >= 0.",
+          };
+        }
+        w.maxDetEnsembleGapC = n;
+        return { ok: true, msg: `WEATHER_MAX_DET_ENSEMBLE_GAP_C=${n}` };
+      }
       case "KELLY_FRACTION": {
         const n = parseNum();
         if (n == null || n < 0 || n > 10) {
@@ -1929,6 +1970,17 @@ export class TelegramBot {
         }
         w.minPrice = n;
         return { ok: true, msg: `WEATHER_MIN_PRICE=${n}` };
+      }
+      case "MAX_MARKET_FAVORITE_PROB": {
+        const n = parseNum();
+        if (n == null || n < 0 || n > 1) {
+          return {
+            ok: false,
+            msg: "WEATHER_MAX_MARKET_FAVORITE_PROB must be between 0 and 1.",
+          };
+        }
+        w.maxMarketFavoriteProb = n;
+        return { ok: true, msg: `WEATHER_MAX_MARKET_FAVORITE_PROB=${n}` };
       }
       case "MAX_PRICE": {
         const n = parseNum();
@@ -2119,6 +2171,17 @@ export class TelegramBot {
         }
         w.biasMinSamples = n;
         return { ok: true, msg: `WEATHER_BIAS_MIN_SAMPLES=${n}` };
+      }
+      case "MIN_CITY_BIAS_SAMPLES_TO_TRADE": {
+        const n = parseIntNum();
+        if (n == null || n < 0) {
+          return {
+            ok: false,
+            msg: "WEATHER_MIN_CITY_BIAS_SAMPLES_TO_TRADE must be an integer >= 0.",
+          };
+        }
+        w.minCityBiasSamplesToTrade = n;
+        return { ok: true, msg: `WEATHER_MIN_CITY_BIAS_SAMPLES_TO_TRADE=${n}` };
       }
       case "MAX_CITY_BIAS_C": {
         const n = parseNum();

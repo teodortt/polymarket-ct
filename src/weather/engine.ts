@@ -324,6 +324,17 @@ export class WeatherEngine {
     const best = signal.best;
     if (!best || best.buyPrice == null) return false;
 
+    if (this.cfg.minCityBiasSamplesToTrade > 0) {
+      const samples = this.cityBiasSamples(signal.event.city);
+      if (samples < this.cfg.minCityBiasSamplesToTrade) {
+        console.log(
+          `[Weather] skip ${signal.event.city} ${signal.event.targetDate}: ` +
+            `calibration samples ${samples} < min ${this.cfg.minCityBiasSamplesToTrade}`,
+        );
+        return false;
+      }
+    }
+
     // Never trade essentially-settled, same-day outcomes — the book already
     // knows the realized high while the forecast still shows its prior guess.
     if (signal.forecast.leadDays < this.cfg.minLeadDays) return false;
@@ -926,6 +937,11 @@ export class WeatherEngine {
   // Learn the systematic gap between the forecast grid cell and the official
   // station each market resolves against — from realized outcomes — and correct
   // future forecasts by it. Without this, 1° buckets stay perpetually off.
+
+  // Learned correction for a city, in the market's unit (0 until trusted).
+  private cityBiasSamples(city: string): number {
+    return this.calib.bias[cityKey(city)]?.samples ?? 0;
+  }
 
   // Learned correction for a city, in the market's unit (0 until trusted).
   private cityBiasOffset(city: string, unit: TempUnit): number {

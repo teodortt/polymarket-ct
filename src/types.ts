@@ -63,6 +63,18 @@ export interface WeatherConfig {
   minLiquidityUsdc: number; // skip thinner buckets
   minPrice: number; // ignore buys cheaper than this (avoids 0-edges)
   maxPrice: number; // ignore buys richer than this
+  // Reject the model's mode-bucket trade when a DIFFERENT bucket already has
+  // market yesPrice >= this (i.e. the market is confidently backing a bucket
+  // our model disagrees with). Verified 2026-07-06 against real settlements:
+  // fighting a confident market this way lost 12/13 times — the market is
+  // usually right when it disagrees strongly, regardless of stated edge.
+  maxMarketFavoriteProb: number;
+  // Additional confidence gates for the model-selected mode bucket.
+  minModeProb: number; // require model(mode) >= this
+  minModeGap: number; // require model(mode) - model(2nd) >= this
+  // Skip trades when deterministic-vs-ensemble disagreement is too large,
+  // signaling unstable forecast structure. Value is in °C and converted for °F.
+  maxDetEnsembleGapC: number;
   minHoursToResolve: number; // skip events resolving sooner than this
   minLeadDays: number; // never trade events whose measurement day is < this away
   sameDayCutoffHour: number; // skip lead-0 trades once city local hour >= this
@@ -79,6 +91,9 @@ export interface WeatherConfig {
   settleYesThreshold: number; // a bucket Yes ≥ this is treated as the realized outcome
   biasEmaAlpha: number; // EMA weight for each new bias sample (0–1)
   biasMinSamples: number; // require this many samples before applying a city bias
+  // Optional hard gate: require this many city-bias samples before ANY trade.
+  // 0 disables the gate; >0 enforces calibrated-city-only trading.
+  minCityBiasSamplesToTrade: number;
   maxCityBiasC: number; // clamp the learned correction to ±this (°C)
   // Hard cap on the bankroll fraction risked on a single event, applied on top
   // of fractional-Kelly sizing (capital-preservation invariant).

@@ -56,7 +56,7 @@ const weather: WeatherConfig = {
     .filter(Boolean),
   // Minimum edge (model probability − price paid) needed to fire a trade.
   // Conservative default: trade fewer but stronger edges.
-  minEdge: parseFloat(process.env.WEATHER_MIN_EDGE || "0.10"),
+  minEdge: parseFloat(process.env.WEATHER_MIN_EDGE || "0.12"),
   // Conservative fractional Kelly to reduce drawdowns from model error.
   kellyFraction: parseFloat(process.env.WEATHER_KELLY_FRACTION || "0.20"),
   // Bankroll for Kelly sizing. 0 = auto (dry-run start balance / live USDC).
@@ -72,8 +72,25 @@ const weather: WeatherConfig = {
   // Require deeper books to reduce slippage/fake top-of-book quotes.
   minLiquidityUsdc: parseFloat(process.env.WEATHER_MIN_LIQUIDITY_USDC || "250"),
   // Ignore ultra-cheap longshots; they were a frequent source of -90%/-100% settles.
-  minPrice: parseFloat(process.env.WEATHER_MIN_PRICE || "0.03"),
+  // Raised 0.03->0.12 (2026-07-06): real settlement scoring of 13 dry-run trades
+  // showed 11/11 losses for entries <=6c and only a coin-flip above ~15c.
+  minPrice: parseFloat(process.env.WEATHER_MIN_PRICE || "0.12"),
   maxPrice: parseFloat(process.env.WEATHER_MAX_PRICE || "0.97"),
+  // Don't fight a confident market: skip the mode-bucket trade if some OTHER
+  // bucket already has yesPrice >= this. Added 2026-07-06 after real settlement
+  // data showed the model's mode bucket losing to a confident market 12/13 times.
+  maxMarketFavoriteProb: parseFloat(
+    process.env.WEATHER_MAX_MARKET_FAVORITE_PROB || "0.25",
+  ),
+  // High-confidence mode gates: only trade when the model has a clear, strong
+  // top bucket and internal forecast structure is stable.
+  minModeProb: parseFloat(process.env.WEATHER_MIN_MODE_PROB || "0.30"),
+  minModeGap: parseFloat(process.env.WEATHER_MIN_MODE_GAP || "0.07"),
+  // Deterministic-vs-ensemble disagreement threshold in °C. Converted to °F
+  // inside predictor for Fahrenheit markets.
+  maxDetEnsembleGapC: parseFloat(
+    process.env.WEATHER_MAX_DET_ENSEMBLE_GAP_C || "1.5",
+  ),
   // Discovery-time filter only (DISABLED by default). Polymarket sets every
   // event's `endDate` to 12:00 UTC of the measurement day regardless of city,
   // so for western-hemisphere cities it lands in the local MORNING — long
@@ -131,12 +148,17 @@ const weather: WeatherConfig = {
   biasEmaAlpha: parseFloat(process.env.WEATHER_BIAS_EMA_ALPHA || "0.5"),
   // Require this many scored samples before trusting/applying a city's bias.
   biasMinSamples: parseInt(process.env.WEATHER_BIAS_MIN_SAMPLES || "2"),
+  // Optional hard gate for trade eligibility: only trade cities with at least
+  // this many calibration samples. 0 disables this gate.
+  minCityBiasSamplesToTrade: parseInt(
+    process.env.WEATHER_MIN_CITY_BIAS_SAMPLES_TO_TRADE || "2",
+  ),
   // Clamp the learned correction so a bad sample can't wildly shift forecasts.
   maxCityBiasC: parseFloat(process.env.WEATHER_MAX_CITY_BIAS_C || "6"),
   // Hard capital-preservation cap: never stake more than this fraction of the
   // bankroll on one event, regardless of what Kelly suggests.
   maxBankrollFractionPerEvent: parseFloat(
-    process.env.WEATHER_MAX_BANKROLL_FRACTION_PER_EVENT || "0.05",
+    process.env.WEATHER_MAX_BANKROLL_FRACTION_PER_EVENT || "0.035",
   ),
   // Settlement-lock detector thresholds (intraday, obs-grounded near-arb).
   lockMinProb: parseFloat(process.env.WEATHER_LOCK_MIN_PROB || "0.98"),
