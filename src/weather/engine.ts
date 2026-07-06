@@ -666,7 +666,14 @@ export class WeatherEngine {
   async maybeExitPosition(buyTrade: WeatherTradeRecord): Promise<boolean> {
     const pnlInfo = await this.calculatePositionPnL(buyTrade);
 
-    if (!pnlInfo.shouldExit) {
+    // If we already have a pending exit order for this position, keep managing
+    // the exit until it fills. Otherwise a threshold flip can leave a 0-filled
+    // GTC SELL resting forever.
+    await this.refreshOpenOrderCache(true);
+    const pendingExitIds = this.getPendingExitOrderIds(buyTrade);
+    const hasPendingExit = pendingExitIds.length > 0;
+
+    if (!pnlInfo.shouldExit && !hasPendingExit) {
       // Just log, don't exit
       if (pnlInfo.exitPrice) {
         const pnlPct = pnlInfo.pnlFraction
@@ -680,8 +687,6 @@ export class WeatherEngine {
       return false;
     }
 
-    await this.refreshOpenOrderCache(true);
-    const pendingExitIds = this.getPendingExitOrderIds(buyTrade);
     if (pendingExitIds.length > 0) {
       const cancelled = await cancelOrdersByIds(pendingExitIds);
       if (!cancelled.ok) {
@@ -702,7 +707,8 @@ export class WeatherEngine {
     // Place SELL order
     console.log(
       `[Weather] 🚪 Exiting ${buyTrade.city}/${buyTrade.bucketLabel}: ` +
-        `${pnlInfo.reason} | Price: ${buyTrade.price} → ${pnlInfo.exitPrice}`,
+        `${hasPendingExit ? "Pending exit still open — repricing" : pnlInfo.reason} | ` +
+        `Price: ${buyTrade.price} → ${pnlInfo.exitPrice}`,
     );
 
     const remainingShares = this.remainingSharesForBuyTrade(buyTrade);
