@@ -84,8 +84,8 @@ const weather: WeatherConfig = {
   ),
   // High-confidence mode gates: only trade when the model has a clear, strong
   // top bucket and internal forecast structure is stable.
-  minModeProb: parseFloat(process.env.WEATHER_MIN_MODE_PROB || "0.30"),
-  minModeGap: parseFloat(process.env.WEATHER_MIN_MODE_GAP || "0.07"),
+  minModeProb: parseFloat(process.env.WEATHER_MIN_MODE_PROB || "0.15"),
+  minModeGap: parseFloat(process.env.WEATHER_MIN_MODE_GAP || "0.02"),
   // Deterministic-vs-ensemble disagreement threshold in °C. Converted to °F
   // inside predictor for Fahrenheit markets.
   maxDetEnsembleGapC: parseFloat(
