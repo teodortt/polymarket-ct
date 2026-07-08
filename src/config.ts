@@ -82,10 +82,10 @@ const weather: WeatherConfig = {
   minPrice: parseFloat(process.env.WEATHER_MIN_PRICE || "0.001"),
   maxPrice: parseFloat(process.env.WEATHER_MAX_PRICE || "0.97"),
   // Don't fight a very confident market: skip the mode-bucket trade if some
-  // OTHER bucket already has yesPrice >= this. Raised to 0.85 (2026-07-08)
-  // so moderate disagreement does not block all flow on thin same-day boards.
+  // OTHER bucket already has yesPrice >= this. Tuned to 0.93 so we still
+  // reject extreme consensus fights while allowing moderate late-book drift.
   maxMarketFavoriteProb: parseFloat(
-    process.env.WEATHER_MAX_MARKET_FAVORITE_PROB || "0.85",
+    process.env.WEATHER_MAX_MARKET_FAVORITE_PROB || "0.93",
   ),
   // High-confidence mode gates: only trade when the model has a clear, strong
   // top bucket and internal forecast structure is stable.
@@ -95,10 +95,10 @@ const weather: WeatherConfig = {
   // actually placing orders when edge and liquidity are still acceptable.
   minModeGap: parseFloat(process.env.WEATHER_MIN_MODE_GAP || "0.002"),
   // Deterministic-vs-ensemble disagreement threshold in °C. Converted to °F
-  // inside predictor for Fahrenheit markets. Loosened 1.5->2.0 (2026-07-08) —
-  // 1.5 was rejecting borderline-reasonable forecasts (e.g. a 3.2°F/1.8°C gap).
+  // inside predictor for Fahrenheit markets. Set to 3.0 to reduce false
+  // negatives from moderate model spread on volatile same-day boards.
   maxDetEnsembleGapC: parseFloat(
-    process.env.WEATHER_MAX_DET_ENSEMBLE_GAP_C || "2.0",
+    process.env.WEATHER_MAX_DET_ENSEMBLE_GAP_C || "3.0",
   ),
   // Discovery-time filter only (DISABLED by default). Polymarket sets every
   // event's `endDate` to 12:00 UTC of the measurement day regardless of city,
