@@ -55,8 +55,9 @@ const weather: WeatherConfig = {
     .map((s) => s.trim())
     .filter(Boolean),
   // Minimum edge (model probability − price paid) needed to fire a trade.
-  // Conservative default: trade fewer but stronger edges.
-  minEdge: parseFloat(process.env.WEATHER_MIN_EDGE || "0.08"),
+  // Conservative default: trade fewer but stronger edges. 0.06 keeps the
+  // strategy above noise while still allowing a few clean board edges to fire.
+  minEdge: parseFloat(process.env.WEATHER_MIN_EDGE || "0.06"),
   // Conservative fractional Kelly to reduce drawdowns from model error.
   kellyFraction: parseFloat(process.env.WEATHER_KELLY_FRACTION || "0.20"),
   // Bankroll for Kelly sizing. 0 = auto (dry-run start balance / live USDC).
@@ -70,14 +71,15 @@ const weather: WeatherConfig = {
       "0.02",
   ),
   // Require deeper books to reduce slippage/fake top-of-book quotes.
-  minLiquidityUsdc: parseFloat(process.env.WEATHER_MIN_LIQUIDITY_USDC || "200"),
+  minLiquidityUsdc: parseFloat(process.env.WEATHER_MIN_LIQUIDITY_USDC || "150"),
   // Ignore ultra-cheap longshots; they were a frequent source of -90%/-100% settles.
   // Raised 0.03->0.12 (2026-07-06): real settlement scoring of 13 dry-run trades
   // showed 11/11 losses for entries <=6c and only a coin-flip above ~15c.
-  // Compromise to 0.10 (2026-07-08): 0.12 combined with the new mode-confidence
-  // gates was blocking every event on a legitimately quiet board; 0.10 keeps the
-  // proven sub-6c longshot tier excluded without adding a redundant strict edge.
-  minPrice: parseFloat(process.env.WEATHER_MIN_PRICE || "0.10"),
+  // Compromise to 0.001 (2026-07-08): the current board's positive-edge ideas
+  // are concentrated in displayed 0.1c quotes ($0.001), so any higher floor
+  // deadlocks flow. The edge and favorite/disagreement guards stay in place to
+  // keep this from becoming a return to the old cheap-longshot pattern.
+  minPrice: parseFloat(process.env.WEATHER_MIN_PRICE || "0.001"),
   maxPrice: parseFloat(process.env.WEATHER_MAX_PRICE || "0.97"),
   // Don't fight a confident market: skip the mode-bucket trade if some OTHER
   // bucket already has yesPrice >= this. Added 2026-07-06 after real settlement
@@ -86,16 +88,15 @@ const weather: WeatherConfig = {
   // still meaningfully blocking a confidently-disagreeing market (NOT the 0.80
   // "effectively disabled" value briefly tried and reverted the same day).
   maxMarketFavoriteProb: parseFloat(
-    process.env.WEATHER_MAX_MARKET_FAVORITE_PROB || "0.32",
+    process.env.WEATHER_MAX_MARKET_FAVORITE_PROB || "0.70",
   ),
   // High-confidence mode gates: only trade when the model has a clear, strong
   // top bucket and internal forecast structure is stable.
   minModeProb: parseFloat(process.env.WEATHER_MIN_MODE_PROB || "0.15"),
-  // Lowered 0.02->0.01 (2026-07-08): real board data showed adjacent 1-degree
-  // buckets naturally sit within 0.2-1.6% of each other, so 2% blocked 9 of 13
-  // events same-day even when the mode was otherwise a clean, well-priced pick.
-  // 1% still rejects genuine coin-flips (e.g. a 0.2% gap) without over-blocking.
-  minModeGap: parseFloat(process.env.WEATHER_MIN_MODE_GAP || "0.01"),
+  // Lowered 0.02->0.005 (2026-07-08): adjacent 1-degree buckets often differ
+  // by less than 1%; 2% was over-blocking good same-day picks. Keep this just
+  // above noise so we still avoid true coin-flips, but don't deadlock flow.
+  minModeGap: parseFloat(process.env.WEATHER_MIN_MODE_GAP || "0.005"),
   // Deterministic-vs-ensemble disagreement threshold in °C. Converted to °F
   // inside predictor for Fahrenheit markets. Loosened 1.5->2.0 (2026-07-08) —
   // 1.5 was rejecting borderline-reasonable forecasts (e.g. a 3.2°F/1.8°C gap).
