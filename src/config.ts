@@ -81,22 +81,19 @@ const weather: WeatherConfig = {
   // keep this from becoming a return to the old cheap-longshot pattern.
   minPrice: parseFloat(process.env.WEATHER_MIN_PRICE || "0.001"),
   maxPrice: parseFloat(process.env.WEATHER_MAX_PRICE || "0.97"),
-  // Don't fight a confident market: skip the mode-bucket trade if some OTHER
-  // bucket already has yesPrice >= this. Added 2026-07-06 after real settlement
-  // data showed the model's mode bucket losing to a confident market 12/13 times.
-  // Loosened 0.25->0.32 (2026-07-08): small compromise for marginal cases while
-  // still meaningfully blocking a confidently-disagreeing market (NOT the 0.80
-  // "effectively disabled" value briefly tried and reverted the same day).
+  // Don't fight a very confident market: skip the mode-bucket trade if some
+  // OTHER bucket already has yesPrice >= this. Raised to 0.85 (2026-07-08)
+  // so moderate disagreement does not block all flow on thin same-day boards.
   maxMarketFavoriteProb: parseFloat(
-    process.env.WEATHER_MAX_MARKET_FAVORITE_PROB || "0.70",
+    process.env.WEATHER_MAX_MARKET_FAVORITE_PROB || "0.85",
   ),
   // High-confidence mode gates: only trade when the model has a clear, strong
   // top bucket and internal forecast structure is stable.
-  minModeProb: parseFloat(process.env.WEATHER_MIN_MODE_PROB || "0.15"),
-  // Lowered 0.02->0.005 (2026-07-08): adjacent 1-degree buckets often differ
-  // by less than 1%; 2% was over-blocking good same-day picks. Keep this just
-  // above noise so we still avoid true coin-flips, but don't deadlock flow.
-  minModeGap: parseFloat(process.env.WEATHER_MIN_MODE_GAP || "0.005"),
+  minModeProb: parseFloat(process.env.WEATHER_MIN_MODE_PROB || "0.14"),
+  // Lowered 0.02->0.002 (2026-07-08): adjacent 1-degree buckets are frequently
+  // near-ties on active boards. Keep a tiny separation guard, but prioritize
+  // actually placing orders when edge and liquidity are still acceptable.
+  minModeGap: parseFloat(process.env.WEATHER_MIN_MODE_GAP || "0.002"),
   // Deterministic-vs-ensemble disagreement threshold in °C. Converted to °F
   // inside predictor for Fahrenheit markets. Loosened 1.5->2.0 (2026-07-08) —
   // 1.5 was rejecting borderline-reasonable forecasts (e.g. a 3.2°F/1.8°C gap).
