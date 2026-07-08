@@ -1235,6 +1235,14 @@ export class WeatherEngine {
     return this.activeTrades().slice(-n).reverse();
   }
 
+  getCalibrationSummary(): { byCity: { city: string; samples: number }[] } {
+    return {
+      byCity: Object.entries(this.calib.bias)
+        .map(([city, entry]) => ({ city, samples: entry.samples }))
+        .sort((a, b) => a.city.localeCompare(b.city)),
+    };
+  }
+
   private async notifyTrade(signal: WeatherSignal, rec: WeatherTradeRecord) {
     if (!this.notifier) return;
     const icon =

@@ -158,9 +158,11 @@ const weather: WeatherConfig = {
   // Require this many scored samples before trusting/applying a city's bias.
   biasMinSamples: parseInt(process.env.WEATHER_BIAS_MIN_SAMPLES || "2"),
   // Optional hard gate for trade eligibility: only trade cities with at least
-  // this many calibration samples. 0 disables this gate.
+  // this many calibration samples. Default OFF: requiring 2 samples was
+  // silently suppressing otherwise-valid trades in the real place path while
+  // same-day books often appear before a city has enough history.
   minCityBiasSamplesToTrade: parseInt(
-    process.env.WEATHER_MIN_CITY_BIAS_SAMPLES_TO_TRADE || "2",
+    process.env.WEATHER_MIN_CITY_BIAS_SAMPLES_TO_TRADE || "0",
   ),
   // Clamp the learned correction so a bad sample can't wildly shift forecasts.
   maxCityBiasC: parseFloat(process.env.WEATHER_MAX_CITY_BIAS_C || "6"),

@@ -31,13 +31,29 @@ function tradeVerdict(
   cfg: typeof config.weather,
   bankroll: number,
   openEventKeys: Set<string>,
+  cityBiasSamples: number,
 ): { fires: boolean; reason: string; notional?: number } {
   const best = s.best;
   if (!best || best.buyPrice == null) {
-    return { fires: false, reason: `predictor: ${s.bestRejectionReason ?? "no actionable bucket"}` };
+    return {
+      fires: false,
+      reason: `predictor: ${s.bestRejectionReason ?? "no actionable bucket"}`,
+    };
+  }
+  if (
+    cfg.minCityBiasSamplesToTrade > 0 &&
+    cityBiasSamples < cfg.minCityBiasSamplesToTrade
+  ) {
+    return {
+      fires: false,
+      reason: `calibration samples ${cityBiasSamples} < min ${cfg.minCityBiasSamplesToTrade}`,
+    };
   }
   if (s.forecast.leadDays < cfg.minLeadDays) {
-    return { fires: false, reason: `lead ${s.forecast.leadDays}d < minLeadDays ${cfg.minLeadDays}` };
+    return {
+      fires: false,
+      reason: `lead ${s.forecast.leadDays}d < minLeadDays ${cfg.minLeadDays}`,
+    };
   }
   if (s.forecast.leadDays === 0 && cfg.sameDayCutoffHour < 24) {
     const { date, hour } = localClockFromLon(s.geo.lon);
@@ -65,7 +81,11 @@ function tradeVerdict(
   );
   notional = Math.floor(notional * 100) / 100;
   if (notional < cfg.minTradeUsdc) {
-    return { fires: false, reason: `notional $${notional.toFixed(2)} < minTrade $${cfg.minTradeUsdc}`, notional };
+    return {
+      fires: false,
+      reason: `notional $${notional.toFixed(2)} < minTrade $${cfg.minTradeUsdc}`,
+      notional,
+    };
   }
   return { fires: true, reason: "WOULD FIRE", notional };
 }
@@ -76,7 +96,9 @@ async function main() {
     await verifyProxy();
   }
   const cfg = config.weather;
-  console.log("🔎 Weather trade-path diagnostic (read-only — NO orders placed)\n");
+  console.log(
+    "🔎 Weather trade-path diagnostic (read-only — NO orders placed)\n",
+  );
   console.log(
     `Config: enabled=${cfg.enabled} dryRun=${config.dryRun} minEdge=${cfg.minEdge} ` +
       `minPrice=${cfg.minPrice} maxPrice=${cfg.maxPrice} minLiq=$${cfg.minLiquidityUsdc} ` +
@@ -86,18 +108,28 @@ async function main() {
 
   // Execution mode + (live) balance — in LIVE mode an empty USDC wallet blocks
   // every order regardless of edge, so surface it up front.
-  let bankroll = cfg.bankrollUsdc > 0 ? cfg.bankrollUsdc : config.dryRunStartUsdc;
+  let bankroll =
+    cfg.bankrollUsdc > 0 ? cfg.bankrollUsdc : config.dryRunStartUsdc;
   if (config.dryRun) {
-    console.log(`Execution: DRY_RUN (virtual bankroll $${bankroll.toFixed(2)})`);
+    console.log(
+      `Execution: DRY_RUN (virtual bankroll $${bankroll.toFixed(2)})`,
+    );
   } else {
     const live = await getLiveUsdcBalance();
     const minNeeded = Math.max(config.minTradeUsdc, cfg.minTradeUsdc);
     if (live) {
       bankroll = cfg.bankrollUsdc > 0 ? cfg.bankrollUsdc : live.balance;
-      const warn = live.balance < minNeeded ? `  ⚠️ BELOW min trade $${minNeeded} — NO live order can fill!` : "";
-      console.log(`Execution: LIVE | funder ${live.address} | USDC $${live.balance.toFixed(2)}${warn}`);
+      const warn =
+        live.balance < minNeeded
+          ? `  ⚠️ BELOW min trade $${minNeeded} — NO live order can fill!`
+          : "";
+      console.log(
+        `Execution: LIVE | funder ${live.address} | USDC $${live.balance.toFixed(2)}${warn}`,
+      );
     } else {
-      console.log(`Execution: LIVE | ⚠️ could not read USDC balance (auth/funder/proxy?) — orders may fail`);
+      console.log(
+        `Execution: LIVE | ⚠️ could not read USDC balance (auth/funder/proxy?) — orders may fail`,
+      );
     }
   }
   console.log("");
@@ -108,14 +140,26 @@ async function main() {
       .getOpenPositions()
       .map((p) => `${p.city.trim().toLowerCase()}|${p.targetDate}`),
   );
+  const cityBiasSamples = new Map<string, number>();
+  for (const p of engine.getCalibrationSummary().byCity) {
+    cityBiasSamples.set(p.city.trim().toLowerCase(), p.samples);
+  }
 
   const signals = await engine.scanOnce({ place: false });
-  console.log(`\nDiscovered ${signals.length} event(s). Open positions: ${openEventKeys.size}\n`);
+  console.log(
+    `\nDiscovered ${signals.length} event(s). Open positions: ${openEventKeys.size}\n`,
+  );
 
   let wouldFire = 0;
   const rows = signals
     .map((s) => {
-      const v = tradeVerdict(s, cfg, bankroll, openEventKeys);
+      const v = tradeVerdict(
+        s,
+        cfg,
+        bankroll,
+        openEventKeys,
+        cityBiasSamples.get(s.event.city.trim().toLowerCase()) ?? 0,
+      );
       if (v.fires) wouldFire++;
       const mode = s.buckets[0];
       return {
@@ -135,7 +179,13 @@ async function main() {
   // Aggregate the blocking reasons so the dominant failure mode is obvious.
   const reasonCounts = new Map<string, number>();
   for (const s of signals) {
-    const v = tradeVerdict(s, cfg, bankroll, openEventKeys);
+    const v = tradeVerdict(
+      s,
+      cfg,
+      bankroll,
+      openEventKeys,
+      cityBiasSamples.get(s.event.city.trim().toLowerCase()) ?? 0,
+    );
     const bucketed = v.fires
       ? "WOULD FIRE"
       : v.reason
@@ -149,8 +199,12 @@ async function main() {
   console.log("\n── Blocker summary ──");
   [...reasonCounts.entries()]
     .sort((a, b) => b[1] - a[1])
-    .forEach(([reason, n]) => console.log(`  ${String(n).padStart(3)}  ${reason}`));
-  console.log(`\nWOULD FIRE this scan: ${wouldFire} (cap ${cfg.maxTradesPerScan}/scan, ${cfg.maxTradesPerDay}/day)`);
+    .forEach(([reason, n]) =>
+      console.log(`  ${String(n).padStart(3)}  ${reason}`),
+    );
+  console.log(
+    `\nWOULD FIRE this scan: ${wouldFire} (cap ${cfg.maxTradesPerScan}/scan, ${cfg.maxTradesPerDay}/day)`,
+  );
   process.exit(0);
 }
 
