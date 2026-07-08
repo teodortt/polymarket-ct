@@ -56,7 +56,7 @@ const weather: WeatherConfig = {
     .filter(Boolean),
   // Minimum edge (model probability − price paid) needed to fire a trade.
   // Conservative default: trade fewer but stronger edges.
-  minEdge: parseFloat(process.env.WEATHER_MIN_EDGE || "0.12"),
+  minEdge: parseFloat(process.env.WEATHER_MIN_EDGE || "0.08"),
   // Conservative fractional Kelly to reduce drawdowns from model error.
   kellyFraction: parseFloat(process.env.WEATHER_KELLY_FRACTION || "0.20"),
   // Bankroll for Kelly sizing. 0 = auto (dry-run start balance / live USDC).
@@ -70,26 +70,37 @@ const weather: WeatherConfig = {
       "0.02",
   ),
   // Require deeper books to reduce slippage/fake top-of-book quotes.
-  minLiquidityUsdc: parseFloat(process.env.WEATHER_MIN_LIQUIDITY_USDC || "250"),
+  minLiquidityUsdc: parseFloat(process.env.WEATHER_MIN_LIQUIDITY_USDC || "200"),
   // Ignore ultra-cheap longshots; they were a frequent source of -90%/-100% settles.
   // Raised 0.03->0.12 (2026-07-06): real settlement scoring of 13 dry-run trades
   // showed 11/11 losses for entries <=6c and only a coin-flip above ~15c.
-  minPrice: parseFloat(process.env.WEATHER_MIN_PRICE || "0.12"),
+  // Compromise to 0.10 (2026-07-08): 0.12 combined with the new mode-confidence
+  // gates was blocking every event on a legitimately quiet board; 0.10 keeps the
+  // proven sub-6c longshot tier excluded without adding a redundant strict edge.
+  minPrice: parseFloat(process.env.WEATHER_MIN_PRICE || "0.10"),
   maxPrice: parseFloat(process.env.WEATHER_MAX_PRICE || "0.97"),
   // Don't fight a confident market: skip the mode-bucket trade if some OTHER
   // bucket already has yesPrice >= this. Added 2026-07-06 after real settlement
   // data showed the model's mode bucket losing to a confident market 12/13 times.
+  // Loosened 0.25->0.32 (2026-07-08): small compromise for marginal cases while
+  // still meaningfully blocking a confidently-disagreeing market (NOT the 0.80
+  // "effectively disabled" value briefly tried and reverted the same day).
   maxMarketFavoriteProb: parseFloat(
-    process.env.WEATHER_MAX_MARKET_FAVORITE_PROB || "0.25",
+    process.env.WEATHER_MAX_MARKET_FAVORITE_PROB || "0.32",
   ),
   // High-confidence mode gates: only trade when the model has a clear, strong
   // top bucket and internal forecast structure is stable.
   minModeProb: parseFloat(process.env.WEATHER_MIN_MODE_PROB || "0.15"),
-  minModeGap: parseFloat(process.env.WEATHER_MIN_MODE_GAP || "0.02"),
+  // Lowered 0.02->0.01 (2026-07-08): real board data showed adjacent 1-degree
+  // buckets naturally sit within 0.2-1.6% of each other, so 2% blocked 9 of 13
+  // events same-day even when the mode was otherwise a clean, well-priced pick.
+  // 1% still rejects genuine coin-flips (e.g. a 0.2% gap) without over-blocking.
+  minModeGap: parseFloat(process.env.WEATHER_MIN_MODE_GAP || "0.01"),
   // Deterministic-vs-ensemble disagreement threshold in °C. Converted to °F
-  // inside predictor for Fahrenheit markets.
+  // inside predictor for Fahrenheit markets. Loosened 1.5->2.0 (2026-07-08) —
+  // 1.5 was rejecting borderline-reasonable forecasts (e.g. a 3.2°F/1.8°C gap).
   maxDetEnsembleGapC: parseFloat(
-    process.env.WEATHER_MAX_DET_ENSEMBLE_GAP_C || "1.5",
+    process.env.WEATHER_MAX_DET_ENSEMBLE_GAP_C || "2.0",
   ),
   // Discovery-time filter only (DISABLED by default). Polymarket sets every
   // event's `endDate` to 12:00 UTC of the measurement day regardless of city,
