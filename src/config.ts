@@ -55,11 +55,10 @@ const weather: WeatherConfig = {
     .map((s) => s.trim())
     .filter(Boolean),
   // Minimum edge (model probability − price paid) needed to fire a trade.
-  // Conservative default: trade fewer but stronger edges. 0.06 keeps the
-  // strategy above noise while still allowing a few clean board edges to fire.
-  minEdge: parseFloat(process.env.WEATHER_MIN_EDGE || "0.06"),
-  // Conservative fractional Kelly to reduce drawdowns from model error.
-  kellyFraction: parseFloat(process.env.WEATHER_KELLY_FRACTION || "0.20"),
+  // Loosened to increase order flow on quieter boards.
+  minEdge: parseFloat(process.env.WEATHER_MIN_EDGE || "0.04"),
+  // More aggressive fractional Kelly to scale into more opportunities.
+  kellyFraction: parseFloat(process.env.WEATHER_KELLY_FRACTION || "0.35"),
   // Bankroll for Kelly sizing. 0 = auto (dry-run start balance / live USDC).
   bankrollUsdc: parseFloat(process.env.WEATHER_BANKROLL_USDC || "0"),
   maxTradeUsdc: parseFloat(process.env.WEATHER_MAX_TRADE_USDC || "20"),
@@ -68,10 +67,10 @@ const weather: WeatherConfig = {
   maxLiquidityFraction: parseFloat(
     process.env.WEATHER_MAX_LIQUIDITY_FRACTION ||
       process.env.WEATHER_MAX_LIQ_FRACTION ||
-      "0.02",
+      "0.04",
   ),
-  // Require deeper books to reduce slippage/fake top-of-book quotes.
-  minLiquidityUsdc: parseFloat(process.env.WEATHER_MIN_LIQUIDITY_USDC || "150"),
+  // Allow thinner books so more buckets are eligible.
+  minLiquidityUsdc: parseFloat(process.env.WEATHER_MIN_LIQUIDITY_USDC || "75"),
   // Ignore ultra-cheap longshots; they were a frequent source of -90%/-100% settles.
   // Raised 0.03->0.12 (2026-07-06): real settlement scoring of 13 dry-run trades
   // showed 11/11 losses for entries <=6c and only a coin-flip above ~15c.
@@ -80,25 +79,22 @@ const weather: WeatherConfig = {
   // deadlocks flow. The edge and favorite/disagreement guards stay in place to
   // keep this from becoming a return to the old cheap-longshot pattern.
   minPrice: parseFloat(process.env.WEATHER_MIN_PRICE || "0.001"),
-  maxPrice: parseFloat(process.env.WEATHER_MAX_PRICE || "0.97"),
-  // Don't fight a very confident market: skip the mode-bucket trade if some
-  // OTHER bucket already has yesPrice >= this. Tuned to 0.93 so we still
-  // reject extreme consensus fights while allowing moderate late-book drift.
+  maxPrice: parseFloat(process.env.WEATHER_MAX_PRICE || "0.995"),
+  // Very permissive disagreement guard: only reject when another bucket is
+  // almost fully locked by the market.
   maxMarketFavoriteProb: parseFloat(
-    process.env.WEATHER_MAX_MARKET_FAVORITE_PROB || "0.93",
+    process.env.WEATHER_MAX_MARKET_FAVORITE_PROB || "0.995",
   ),
   // High-confidence mode gates: only trade when the model has a clear, strong
   // top bucket and internal forecast structure is stable.
-  minModeProb: parseFloat(process.env.WEATHER_MIN_MODE_PROB || "0.14"),
-  // Lowered 0.02->0.002 (2026-07-08): adjacent 1-degree buckets are frequently
-  // near-ties on active boards. Keep a tiny separation guard, but prioritize
-  // actually placing orders when edge and liquidity are still acceptable.
-  minModeGap: parseFloat(process.env.WEATHER_MIN_MODE_GAP || "0.002"),
+  minModeProb: parseFloat(process.env.WEATHER_MIN_MODE_PROB || "0.08"),
+  // Remove the mode-gap tie break by default to maximize order frequency.
+  minModeGap: parseFloat(process.env.WEATHER_MIN_MODE_GAP || "0"),
   // Deterministic-vs-ensemble disagreement threshold in °C. Converted to °F
-  // inside predictor for Fahrenheit markets. Set to 3.0 to reduce false
-  // negatives from moderate model spread on volatile same-day boards.
+  // inside predictor for Fahrenheit markets. Loosened to avoid filtering
+  // volatile same-day setups.
   maxDetEnsembleGapC: parseFloat(
-    process.env.WEATHER_MAX_DET_ENSEMBLE_GAP_C || "3.0",
+    process.env.WEATHER_MAX_DET_ENSEMBLE_GAP_C || "6.0",
   ),
   // Discovery-time filter only (DISABLED by default). Polymarket sets every
   // event's `endDate` to 12:00 UTC of the measurement day regardless of city,
@@ -122,8 +118,8 @@ const weather: WeatherConfig = {
   sameDayCutoffHour: parseFloat(
     process.env.WEATHER_SAME_DAY_CUTOFF_HOUR || "24",
   ),
-  maxTradesPerScan: parseInt(process.env.WEATHER_MAX_TRADES_PER_SCAN || "6"),
-  maxTradesPerDay: parseInt(process.env.WEATHER_MAX_TRADES_PER_DAY || "30"),
+  maxTradesPerScan: parseInt(process.env.WEATHER_MAX_TRADES_PER_SCAN || "10"),
+  maxTradesPerDay: parseInt(process.env.WEATHER_MAX_TRADES_PER_DAY || "80"),
   // KDE smoothing over ensemble members (°F). Covers integer rounding,
   // station-vs-grid bias and known ensemble under-dispersion. Widened from the
   // original 1.0 — live scans showed true daily-max error of 2–3°C, far beyond
@@ -166,10 +162,9 @@ const weather: WeatherConfig = {
   ),
   // Clamp the learned correction so a bad sample can't wildly shift forecasts.
   maxCityBiasC: parseFloat(process.env.WEATHER_MAX_CITY_BIAS_C || "6"),
-  // Hard capital-preservation cap: never stake more than this fraction of the
-  // bankroll on one event, regardless of what Kelly suggests.
+  // Per-event bankroll cap, loosened to allow larger entries per signal.
   maxBankrollFractionPerEvent: parseFloat(
-    process.env.WEATHER_MAX_BANKROLL_FRACTION_PER_EVENT || "0.035",
+    process.env.WEATHER_MAX_BANKROLL_FRACTION_PER_EVENT || "0.08",
   ),
   // Settlement-lock detector thresholds (intraday, obs-grounded near-arb).
   lockMinProb: parseFloat(process.env.WEATHER_LOCK_MIN_PROB || "0.98"),
