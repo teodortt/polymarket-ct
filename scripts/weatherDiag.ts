@@ -32,12 +32,27 @@ function tradeVerdict(
   bankroll: number,
   openEventKeys: Set<string>,
   cityBiasSamples: number,
+  killSwitchActive: boolean,
 ): { fires: boolean; reason: string; notional?: number } {
   const best = s.best;
   if (!best || best.buyPrice == null) {
     return {
       fires: false,
       reason: `predictor: ${s.bestRejectionReason ?? "no actionable bucket"}`,
+    };
+  }
+  // Mirror maybeTrade: calibration kill switch pauses ALL new entries.
+  if (killSwitchActive) {
+    return {
+      fires: false,
+      reason: "calibration kill switch active (scoring degraded)",
+    };
+  }
+  // Mirror maybeTrade: resolution dispute guard.
+  if (cfg.resolutionGuardEnabled && s.resolutionRisk === "high") {
+    return {
+      fires: false,
+      reason: "resolution dispute risk HIGH (guard)",
     };
   }
   if (
@@ -135,6 +150,16 @@ async function main() {
   console.log("");
 
   const engine = new WeatherEngine();
+  const health = engine.getCalibrationHealth();
+  const killSwitchActive = health.active;
+  console.log(
+    `Guards: resolutionGuard=${cfg.resolutionGuardEnabled} ` +
+      `killSwitch=${cfg.calibrationKillSwitchEnabled}` +
+      (health.degraded
+        ? ` | calibration DEGRADED${killSwitchActive ? " → PAUSING all entries" : " (kill switch off)"}`
+        : "") +
+      "\n",
+  );
   const openEventKeys = new Set(
     engine
       .getOpenPositions()
@@ -159,6 +184,7 @@ async function main() {
         bankroll,
         openEventKeys,
         cityBiasSamples.get(s.event.city.trim().toLowerCase()) ?? 0,
+        killSwitchActive,
       );
       if (v.fires) wouldFire++;
       const mode = s.buckets[0];
@@ -185,6 +211,7 @@ async function main() {
       bankroll,
       openEventKeys,
       cityBiasSamples.get(s.event.city.trim().toLowerCase()) ?? 0,
+      killSwitchActive,
     );
     const bucketed = v.fires
       ? "WOULD FIRE"

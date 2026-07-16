@@ -1353,6 +1353,23 @@ export class WeatherEngine {
     };
   }
 
+  // Read-only calibration-health view (for diagnostics + the opt-in kill switch).
+  // `active` is true only when the kill switch is enabled AND calibration is
+  // degraded — i.e. when new entries are actually being paused.
+  getCalibrationHealth(): {
+    degraded: boolean;
+    note: string;
+    killSwitchEnabled: boolean;
+    active: boolean;
+  } {
+    return {
+      degraded: this.calibrationDegraded,
+      note: this.calibrationHealthNote,
+      killSwitchEnabled: this.cfg.calibrationKillSwitchEnabled,
+      active: this.cfg.calibrationKillSwitchEnabled && this.calibrationDegraded,
+    };
+  }
+
   private async notifyTrade(signal: WeatherSignal, rec: WeatherTradeRecord) {
     if (!this.notifier) return;
     const icon =
