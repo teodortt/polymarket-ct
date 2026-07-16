@@ -13,6 +13,8 @@
     "weather:scan": "ts-node src/weather/cli.ts",
     "weather:diag": "ts-node scripts/weatherDiag.ts",
     "weather:obs": "ts-node src/weather/obsCli.ts",
+    "weather:research": "ts-node src/weather/researchCli.ts",
+    "weather:score": "ts-node src/weather/scoreCli.ts",
     "weather:backtest": "ts-node src/weather/backtestCli.ts"
   },
   "dependencies": {

@@ -24,6 +24,12 @@ import {
   loadBacktestStore,
   measuredErrorSigmaC,
 } from "./backtest";
+import {
+  ResolutionStore,
+  getResolutionSpec,
+  loadResolutionStore,
+  resolutionNote as buildResolutionNote,
+} from "./resolutionResearch";
 import { discoverTemperatureEvents } from "./markets";
 import { predictEvent } from "./predictor";
 import { formatReport } from "./report";
@@ -32,6 +38,8 @@ const DATA_DIR = path.join(process.cwd(), "data");
 const STATE_PATH = path.join(DATA_DIR, "weather.json");
 const CALIB_PATH = path.join(DATA_DIR, "weatherCalibration.json");
 const BACKTEST_PATH = path.join(DATA_DIR, "weatherBacktest.json");
+const RESOLUTION_PATH = path.join(DATA_DIR, "weatherResolution.json");
+const SCORE_PATH = path.join(DATA_DIR, "weatherScore.json");
 const TRADES_MAX = 1000;
 const CLOB_API = "https://clob.polymarket.com";
 
@@ -147,6 +155,12 @@ export class WeatherEngine {
   // Measured per-(city, lead) forecast-error σ, read from data/weatherBacktest.json
   // (produced by `npm run weather:backtest`). Used as a floor on forecast width.
   private backtest: BacktestStore | null = null;
+  // Per-city resolution specs (data/weatherResolution.json, `npm run weather:research`).
+  // Surfaced in reports; gates trades only when resolutionGuardEnabled.
+  private resolution: ResolutionStore | null = null;
+  // Calibration health from data/weatherScore.json (`npm run weather:score`).
+  private calibrationDegraded = false;
+  private calibrationHealthNote = "";
   private openOrderIds: Set<string> = new Set();
   private openOrdersUpdatedAt = 0;
   // Lets setEnabled(true) wake the sleeping loop immediately.
@@ -161,6 +175,8 @@ export class WeatherEngine {
     this.loadState();
     this.loadCalibration();
     this.loadBacktest();
+    this.loadResolution();
+    this.loadCalibrationHealth();
   }
 
   // ── lifecycle ───────────────────────────────────────────────────────────────
@@ -280,6 +296,14 @@ export class WeatherEngine {
         if (!forecast) continue;
 
         const signal = predictEvent(event, geo, forecast, this.cfg);
+        // Module 1: surface the resolution-station risk for this event's city
+        // (read-only) so reports/alerts show whether the edge is anchored to
+        // the station the market actually settles on.
+        const spec = getResolutionSpec(this.resolution, event.city);
+        if (spec) {
+          signal.resolutionNote = buildResolutionNote(spec);
+          signal.resolutionRisk = spec.disputeRisk;
+        }
         signals.push(signal);
 
         // Ground-truth calibration: on the measurement day, read the official
@@ -342,6 +366,28 @@ export class WeatherEngine {
   ): Promise<boolean> {
     const best = signal.best;
     if (!best || best.buyPrice == null) return false;
+
+    // Module 5/6: calibration kill switch. When enabled and the last scoring
+    // run flagged degraded calibration, pause ALL new entries — this is the
+    // guard against repeating the documented losing regime.
+    if (this.cfg.calibrationKillSwitchEnabled && this.calibrationDegraded) {
+      console.log(
+        `[Weather] skip ${signal.event.city} ${signal.event.targetDate}: ` +
+          `calibration kill switch active (${this.calibrationHealthNote})`,
+      );
+      return false;
+    }
+
+    // Module 1: resolution dispute guard (opt-in). Do not trade a market whose
+    // resolution station is ambiguous/disputed (e.g. airport≠synoptic), where
+    // any computed edge is likely an artifact of the wrong station.
+    if (this.cfg.resolutionGuardEnabled && signal.resolutionRisk === "high") {
+      console.log(
+        `[Weather] skip ${signal.event.city} ${signal.event.targetDate}: ` +
+          `resolution dispute risk HIGH (${signal.resolutionNote ?? "unverified station"})`,
+      );
+      return false;
+    }
 
     if (this.cfg.minCityBiasSamplesToTrade > 0) {
       const samples = this.cityBiasSamples(signal.event.city);
@@ -1130,6 +1176,43 @@ export class WeatherEngine {
           `[Weather] Loaded forecast-error σ floor for ${n} location(s).`,
         );
       }
+    }
+  }
+
+  private loadResolution() {
+    this.resolution = loadResolutionStore(RESOLUTION_PATH);
+    if (this.resolution) {
+      const specs = Object.values(this.resolution.specs);
+      const high = specs.filter((s) => s.disputeRisk === "high").length;
+      if (specs.length > 0) {
+        console.log(
+          `[Weather] Loaded resolution specs for ${specs.length} city(ies)` +
+            (high > 0 ? ` (${high} high dispute-risk)` : "") +
+            (this.cfg.resolutionGuardEnabled ? " — guard ON" : "") +
+            ".",
+        );
+      }
+    }
+  }
+
+  private loadCalibrationHealth() {
+    try {
+      if (!fs.existsSync(SCORE_PATH)) return;
+      const p = JSON.parse(fs.readFileSync(SCORE_PATH, "utf8"));
+      const status = p?.health?.status;
+      this.calibrationDegraded = status === "degraded";
+      if (this.calibrationDegraded) {
+        this.calibrationHealthNote = Array.isArray(p?.health?.reasons)
+          ? p.health.reasons.join("; ")
+          : "degraded";
+        if (this.cfg.calibrationKillSwitchEnabled) {
+          console.warn(
+            `[Weather] ⚠ calibration kill switch ARMED — degraded: ${this.calibrationHealthNote}`,
+          );
+        }
+      }
+    } catch {
+      /* absent/unparseable score file is a safe no-op */
     }
   }
 

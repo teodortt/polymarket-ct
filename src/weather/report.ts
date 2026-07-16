@@ -190,6 +190,7 @@ export function formatReport(
     lines.push(
       `\n${b(s.event.city)} — ${s.event.targetDate}  _(lead ${f.leadDays}d · ${f.members} members)_`,
     );
+    if (s.resolutionNote) lines.push(s.resolutionNote);
     lines.push(
       `μ ${f.mean.toFixed(1)}${u} · p50 ${f.p50.toFixed(0)}${u} · p10–p90 ${f.p10.toFixed(0)}–${f.p90.toFixed(0)}${u}`,
     );

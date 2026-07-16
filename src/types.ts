@@ -108,6 +108,15 @@ export interface WeatherConfig {
   // backtest harness. Prevents overconfident, phantom-edge forecasts.
   backtestSigmaFloor: boolean; // apply the measured σ floor when data is present
   backtestMinSamples: number; // min scored days before a measured σ is trusted
+  // Module 1 (Resolution research): when true, skip trading events flagged
+  // high dispute-risk in data/weatherResolution.json. Default OFF — the store
+  // is surfaced in reports either way; the guard only gates trades when opted in.
+  resolutionGuardEnabled: boolean;
+  // Module 5/6 (Calibration kill switch): when true, pause NEW entries while
+  // data/weatherScore.json reports degraded calibration. Default OFF.
+  calibrationKillSwitchEnabled: boolean;
+  calibrationMinScored: number; // min resolved trades before judging health
+  calibrationMaxLossRoi: number; // ROI floor below which calibration is degraded
   // Exit management: auto-close positions based on P&L thresholds.
   exitEnabled: boolean; // enable automatic exit/exit scanning
   exitProfitTarget: number; // exit with >=this profit fraction (e.g. 0.60 = 60%)
@@ -198,6 +207,9 @@ export interface WeatherSignal {
   buckets: BucketSignal[]; // sorted by modelProb desc
   best: BucketSignal | null; // best actionable positive-edge bucket
   bestRejectionReason?: string; // why mode bucket was not actionable
+  // Module 1 read-only surfacing: resolution-station risk for this event's city.
+  resolutionNote?: string; // one-line summary for reports/alerts
+  resolutionRisk?: "low" | "medium" | "high";
   generatedAt: number;
 }
 

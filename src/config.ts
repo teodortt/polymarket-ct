@@ -178,6 +178,23 @@ const weather: WeatherConfig = {
   backtestMinSamples: parseInt(
     process.env.WEATHER_BACKTEST_MIN_SAMPLES || "20",
   ),
+  // Module 1 (Resolution research). The resolution store (data/weatherResolution.json,
+  // built by `npm run weather:research`) is always surfaced in reports. This
+  // guard, when enabled, additionally SKIPS trading events flagged high
+  // dispute-risk (e.g. airport≠synoptic station). Default off so behavior is
+  // unchanged until explicitly opted in.
+  resolutionGuardEnabled: process.env.WEATHER_RESOLUTION_GUARD === "true",
+  // Module 5/6 (Calibration kill switch). When enabled, pause NEW entries while
+  // data/weatherScore.json (built by `npm run weather:score`) reports degraded
+  // calibration. Default off.
+  calibrationKillSwitchEnabled:
+    process.env.WEATHER_CALIBRATION_KILL_SWITCH === "true",
+  calibrationMinScored: parseInt(
+    process.env.WEATHER_CALIBRATION_MIN_SCORED || "10",
+  ),
+  calibrationMaxLossRoi: parseFloat(
+    process.env.WEATHER_CALIBRATION_MAX_LOSS_ROI || "-0.1",
+  ),
   // Exit management: automatically close positions based on P&L thresholds.
   exitEnabled: process.env.WEATHER_EXIT_ENABLED === "true",
   // Exit position when profit reaches this fraction (e.g. 0.60 = 60% ROI).

@@ -141,6 +141,19 @@ async function resolveStation(geo: GeoPoint): Promise<StationRef | null> {
   }
 }
 
+/**
+ * Resolve the official NWS reporting station (id + timezone) for a coordinate,
+ * WITHOUT pulling observations. Used by the resolution-research module to record
+ * which station a U.S. market settles against. Returns null for non-U.S. points
+ * or any API failure. Shares the process-lifetime `stationCache` with
+ * `fetchStationObs`, so this costs at most one round-trip per unique coordinate.
+ */
+export async function resolveNwsStation(
+  geo: GeoPoint,
+): Promise<{ stationId: string; timeZone: string } | null> {
+  return resolveStation(geo);
+}
+
 export async function fetchStationObs(
   geo: GeoPoint,
   unit: TempUnit,
