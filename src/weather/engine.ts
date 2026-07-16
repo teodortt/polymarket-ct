@@ -93,6 +93,20 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// A sleep that can be cancelled early by resolving the promise from outside.
+function cancellableSleep(
+  ms: number,
+  register: (cancelFn: () => void) => void,
+): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    register(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
 function todayStr(ts = Date.now()): string {
   return new Date(ts).toISOString().slice(0, 10);
 }
@@ -135,6 +149,8 @@ export class WeatherEngine {
   private backtest: BacktestStore | null = null;
   private openOrderIds: Set<string> = new Set();
   private openOrdersUpdatedAt = 0;
+  // Lets setEnabled(true) wake the sleeping loop immediately.
+  private cancelSleep?: () => void;
 
   constructor(
     notifier?: WeatherNotifier,
@@ -186,7 +202,10 @@ export class WeatherEngine {
       } catch (err: any) {
         console.error("[Weather] scan error:", err?.message ?? err);
       }
-      await sleep(this.cfg.scanIntervalMs);
+      await cancellableSleep(this.cfg.scanIntervalMs, (cancel) => {
+        this.cancelSleep = cancel;
+      });
+      this.cancelSleep = undefined;
     }
   }
 
@@ -1229,6 +1248,14 @@ export class WeatherEngine {
   setEnabled(enabled: boolean) {
     this.cfg.enabled = enabled;
     config.weather.enabled = enabled;
+    // If the engine is currently sleeping between scans, wake it up so the
+    // first scan under the new setting happens immediately rather than waiting
+    // up to scanIntervalMs (10 min by default). This is the reason /weather on
+    // used to appear to "cause" orders — the flag was set but the loop slept
+    // through the remainder of the current interval before acting.
+    if (enabled && this.running && this.cancelSleep) {
+      this.cancelSleep();
+    }
   }
 
   recentTrades(n: number): WeatherTradeRecord[] {
