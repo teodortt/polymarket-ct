@@ -1830,10 +1830,15 @@ export class TelegramBot {
       kv("WEATHER_LOCK_MAX_ASK", w.lockMaxAsk) +
       kv("WEATHER_BACKTEST_SIGMA_FLOOR", w.backtestSigmaFloor) +
       kv("WEATHER_BACKTEST_MIN_SAMPLES", w.backtestMinSamples) +
+      kv("WEATHER_RESOLUTION_GUARD", w.resolutionGuardEnabled) +
+      kv("WEATHER_CALIBRATION_KILL_SWITCH", w.calibrationKillSwitchEnabled) +
+      kv("WEATHER_CALIBRATION_MIN_SCORED", w.calibrationMinScored) +
+      kv("WEATHER_CALIBRATION_MAX_LOSS_ROI", w.calibrationMaxLossRoi) +
       kv("WEATHER_CITIES", w.cities.join(",") || "(all)") +
       kv("WEATHER_MODELS", w.models) +
       `\n` +
       `_Runtime only: values are not persisted to .env automatically._\n` +
+      `_Exit knobs (WEATHER_EXIT_*) are shown/set via_ \`/exitcfg\`.\n` +
       `Usage:\n` +
       `\`/weather on\` | \`/weather off\`\n` +
       `\`/weathercfg WEATHER_MIN_PRICE 0.12\``
@@ -2237,6 +2242,50 @@ export class TelegramBot {
         }
         w.backtestMinSamples = n;
         return { ok: true, msg: `WEATHER_BACKTEST_MIN_SAMPLES=${n}` };
+      }
+      case "RESOLUTION_GUARD": {
+        const b = parseBool(valueRaw);
+        if (b === undefined) {
+          return {
+            ok: false,
+            msg: "Invalid boolean. Use true/false or on/off.",
+          };
+        }
+        w.resolutionGuardEnabled = b;
+        return { ok: true, msg: `WEATHER_RESOLUTION_GUARD=${b}` };
+      }
+      case "CALIBRATION_KILL_SWITCH": {
+        const b = parseBool(valueRaw);
+        if (b === undefined) {
+          return {
+            ok: false,
+            msg: "Invalid boolean. Use true/false or on/off.",
+          };
+        }
+        w.calibrationKillSwitchEnabled = b;
+        return { ok: true, msg: `WEATHER_CALIBRATION_KILL_SWITCH=${b}` };
+      }
+      case "CALIBRATION_MIN_SCORED": {
+        const n = parseIntNum();
+        if (n == null || n < 0) {
+          return {
+            ok: false,
+            msg: "WEATHER_CALIBRATION_MIN_SCORED must be an integer >= 0.",
+          };
+        }
+        w.calibrationMinScored = n;
+        return { ok: true, msg: `WEATHER_CALIBRATION_MIN_SCORED=${n}` };
+      }
+      case "CALIBRATION_MAX_LOSS_ROI": {
+        const n = parseNum();
+        if (n == null || n < -1 || n > 1) {
+          return {
+            ok: false,
+            msg: "WEATHER_CALIBRATION_MAX_LOSS_ROI must be between -1 and 1 (e.g. -0.1).",
+          };
+        }
+        w.calibrationMaxLossRoi = n;
+        return { ok: true, msg: `WEATHER_CALIBRATION_MAX_LOSS_ROI=${n}` };
       }
       case "CITIES": {
         const raw = valueRaw.trim();
